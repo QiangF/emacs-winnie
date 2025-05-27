@@ -40,15 +40,15 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
       (winnie-to-window-tree (if (> (length others) 2) others (car others))
                              newwin fallback-buf))))
 
-(defun winnie-set (winnies winnie-position)
-  (let* ((winnie-length (length winnies))
+(defun winnie-set (configs winnie-position)
+  (let* ((winnie-length (length configs))
          (winnie-position (mod winnie-position winnie-length))
          scratch-buf)
     (when (window-dedicated-p)
       (setq scratch-buf (get-buffer-create "*scratch*"))
       (pop-to-buffer scratch-buf))
     (delete-other-windows)
-    (winnie-to-window-tree (nth winnie-position winnies)
+    (winnie-to-window-tree (nth winnie-position configs)
                            (selected-window)
                            scratch-buf)
     (message "Win-config %s / %s" (+ 1 winnie-position) winnie-length)))
@@ -138,12 +138,12 @@ from the second element of output from `window-tree'."
                     (winnie-equal others-a others-b)
                   (winnie-equal (car others-a) (car others-b))))))))
 
-(defun winnie-find-index-for-conf (winnies conf)
-  "Return index of ITEM if on winnies, else nil.
+(defun winnie-find-index-for-conf (configs conf)
+  "Return index of ITEM if on configs, else nil.
 Comparison is done via `equal'.  The index is 0-based."
   (catch 'found
-    (dotimes (ind (length winnies))
-      (when (winnie-equal conf (nth ind winnies))
+    (dotimes (ind (length configs))
+      (when (winnie-equal conf (nth ind configs))
         (throw 'found ind)))))
 
 (defun nth-delq (n list-in)
@@ -163,15 +163,15 @@ Comparison is done via `equal'.  The index is 0-based."
       (let* ((frame (selected-frame))
              (win (or win (selected-window)))
              (conf (winnie-dump-window-tree))
-             (winnies (cdr (assoc frame winnie-alist)))
-             (ind (winnie-find-index-for-conf winnies conf)))
+             (configs (cdr (assoc frame winnie-alist)))
+             (ind (winnie-find-index-for-conf configs conf)))
         (if ind
             (progn
-              (setq winnies (nth-delq ind winnies)))
-          (when (> (length winnies) winnie-max-num)
-            (setq winnies (butlast winnies))))
-        (push conf winnies)
-        (alist-set 'winnie-alist frame winnies)))))
+              (setq configs (nth-delq ind configs)))
+          (when (> (length configs) winnie-max-num)
+            (setq configs (butlast configs))))
+        (push conf configs)
+        (alist-set 'winnie-alist frame configs)))))
 
 (defun alist-set (alist-symbol key value)
   "Set KEY to VALUE in alist ALIST-SYMBOL."
@@ -179,17 +179,13 @@ Comparison is done via `equal'.  The index is 0-based."
        (cons (cons key value)
              (assoc-delete-all key (eval alist-symbol)))))
 
-    (defun winnie-set-relative (step)
-      (cl-letf ((window-state-change-functions nil))
-        (my-function)))
-
 (defun winnie-set-relative (step)
-  (let* ((winnies (cdr (assoc (selected-frame) winnie-alist))))
-    (if winnies
-        (progn
-          (cl-incf winnie-traversal-position step)
-          (winnie-set winnies winnie-traversal-position))
-      (message "Frame has no saved winnie"))))
+  (cl-letf ((window-state-change-functions nil))
+    (let* ((configs (cdr (assoc (selected-frame) winnie-alist))))
+      (if configs
+          (progn (cl-incf winnie-traversal-position step)
+                 (winnie-set configs winnie-traversal-position))
+        (message "Frame has no saved winnie configs")))))
 
 (defun winnie-command-p (cmd)
   (or (equal cmd 'winnie-previous)
