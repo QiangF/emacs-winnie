@@ -232,7 +232,7 @@ into windows)."
   (if winnie-mode
       (progn
         (add-hook 'window-state-change-functions 'winnie-save)
-        (advice-add #'keyboard-quit :after #'winnie-keyboard-quit))
+        (advice-add #'keyboard-quit :before #'winnie-keyboard-quit))
     (remove-hook 'window-state-change-functions 'winnie-save)
     (advice-remove #'keyboard-quit #'winnie-keyboard-quit)))
 
