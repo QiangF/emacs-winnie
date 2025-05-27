@@ -1,5 +1,4 @@
-;;; winnie.el --- Restore old window configurations the cleaner way
-;; -*- lexical-binding: t -*-
+;;; winnie.el --- Restore old window configurations the cleaner way  -*- lexical-binding: t; -*-
 
 (eval-when-compile (require 'cl-lib))
 (defvar winnie-max-size-diff 3)
@@ -180,14 +179,9 @@ Comparison is done via `equal'.  The index is 0-based."
        (cons (cons key value)
              (assoc-delete-all key (eval alist-symbol)))))
 
-;; (defun winnie-set-relative (step)
-;;   (cl-letf ((window-state-change-functions nil))
-;;     (let* ((winnies (cdr (assoc (selected-frame) winnie-alist))))
-;;       (if winnies
-;;           (progn
-;;             (cl-incf winnie-traversal-position step)
-;;             (winnie-set winnies))
-;;         (message "Frame has no saved winnie")))))
+    (defun winnie-set-relative (step)
+      (cl-letf ((window-state-change-functions nil))
+        (my-function)))
 
 (defun winnie-set-relative (step)
   (let* ((winnies (cdr (assoc (selected-frame) winnie-alist))))
@@ -207,14 +201,14 @@ Comparison is done via `equal'.  The index is 0-based."
   (winnie-set-relative 1))
 
 (defun winnie-previous ()
-  (interactive "P")
+  (interactive)
   (if (winnie-command-p last-command)
       (winnie-set-relative 1)
     (setq winnie-traversal-position 0)
     (winnie-set-relative 1)))
 
 (defun winnie-next ()
-  (interactive "P")
+  (interactive)
   (if (winnie-command-p last-command)
       (winnie-set-relative -1)
     (setq winnie-traversal-position 0)
