@@ -153,25 +153,26 @@ Comparison is done via `equal'.  The index is 0-based."
   (declare (gv-setter (lambda (store) `(if ,store (activate-mark) (deactivate-mark)))))
   (region-active-p))
 
-(defun winnie-save (&optional win)
+(defun winnie-save (&optional frame)
   (interactive)
-  (unless (or (active-minibuffer-window)
-              (winnie-command-p last-command)
-              (minibufferp))
-    (unless (or (equal 'self-insert-command real-this-command)
-                (winnie-command-p real-last-command))
-      (let* ((frame (selected-frame))
-             (win (or win (selected-window)))
-             (conf (winnie-dump-window-tree))
-             (configs (cdr (assoc frame winnie-alist)))
-             (ind (winnie-find-index-for-conf configs conf)))
-        (if ind
-            (progn
-              (setq configs (nth-delq ind configs)))
-          (when (> (length configs) winnie-max-num)
-            (setq configs (butlast configs))))
-        (push conf configs)
-        (alist-set 'winnie-alist frame configs)))))
+  (with-selected-frame frame
+    (unless (or (active-minibuffer-window)
+                (winnie-command-p last-command)
+                (minibufferp))
+      (unless (or (equal 'self-insert-command real-this-command)
+                  (winnie-command-p real-last-command))
+        (let* ((frame (selected-frame))
+               (win (selected-window))
+               (conf (winnie-dump-window-tree))
+               (configs (cdr (assoc frame winnie-alist)))
+               (ind (winnie-find-index-for-conf configs conf)))
+          (if ind
+              (progn
+                (setq configs (nth-delq ind configs)))
+            (when (> (length configs) winnie-max-num)
+              (setq configs (butlast configs))))
+          (push conf configs)
+          (alist-set 'winnie-alist frame configs))))))
 
 (defun alist-set (alist-symbol key value)
   "Set KEY to VALUE in alist ALIST-SYMBOL."
