@@ -3,7 +3,7 @@
 (eval-when-compile (require 'cl-lib))
 (defvar winnie-max-size-diff 3)
 (defvar winnie-alist nil)
-(setq winnie-max-num 20)
+(setq winnie-max-conf-num 20)
 (defvar winnie-traverse-position 0)
 (setq winnie-boring-buffers '("*Completions*" "*lispy-message*"))
 (setq winnie-boring-buffers-regexp "^ \\*")
@@ -15,19 +15,19 @@
          (buf-point (nth 2 win-info))
          (window-start (nth 3 win-info))
          (selected (nth 4 win-info)))
-    (cond (buf (set-window-buffer win buf))
+    (cond (buf
+           (set-window-buffer win buf))
           (buf-file-name
-           (if (directory-name-p buf-file-name)
-               (dired buf-file-name)
-             (find-file buf-file-name)))
+           (set-window-buffer win (if (directory-name-p buf-file-name)
+                                      (dired-internal-noselect buf-file-name)
+                                    (find-file-noselect buf-file-name))))
           (t (set-window-buffer win fallback-buf)))
     (when selected (select-window win 'mark-for-redisplay))))
 
-(defun winnie-to-window-tree (conf win fallback-buf)
+(defun winnie-list-to-tree (conf win fallback-buf)
   "Resume the window from saved list CONF, WIN is `selected-window', on which performs the
 split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
-  (if
-      (stringp (car conf))
+  (if (stringp (car conf))
       (winnie-set-winbuf win conf fallback-buf)
     (let* ((horizontal (eq (car conf) 'h))
            (newwin (split-window win
@@ -36,8 +36,8 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
                                    (+ (cadr conf) 1))
                                  horizontal))
            (others (nthcdr 3 conf)))
-      (winnie-to-window-tree (cl-third conf) win fallback-buf)
-      (winnie-to-window-tree (if (> (length others) 2) others (car others))
+      (winnie-list-to-tree (cl-third conf) win fallback-buf)
+      (winnie-list-to-tree (if (> (length others) 2) others (car others))
                              newwin fallback-buf))))
 
 (defun winnie-set (confs winnie-position)
@@ -47,12 +47,12 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
       (setq scratch-buf (get-buffer-create "*scratch*"))
       (pop-to-buffer scratch-buf))
     (delete-other-windows)
-    (winnie-to-window-tree (nth winnie-position confs)
+    (winnie-list-to-tree (nth winnie-position confs)
                            (selected-window)
                            scratch-buf)
     (message "Win-config %s / %s" (+ 1 winnie-position) winnie-length)))
 
-(defun winnie-window-tree-to-list (tree selected)
+(defun winnie-tree-to-list (tree selected)
   "TREE is the output of `window-tree' except `minibuffer'."
   (if (windowp tree)
       (with-selected-window tree
@@ -75,14 +75,14 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
            (children (cddr tree))
            (branch1 (car children))
            (branch2 (cdr children))
-           (branch1-list (winnie-window-tree-to-list branch1 selected))
+           (branch1-list (winnie-tree-to-list branch1 selected))
            (branch2-list (if (> (length branch2) 1)
-                             (winnie-window-tree-to-list (cons vertical-split (cons nil branch2)))
-                           (winnie-window-tree-to-list (car branch2) selected))))
+                             (winnie-tree-to-list (cons vertical-split (cons nil branch2)))
+                           (winnie-tree-to-list (car branch2) selected))))
       (if (and branch1-list branch2-list)
           (list (if vertical-split 'v 'h)
-                (if vertical-split (winnie-trans-window-height branch1)
-                  (winnie-trans-window-width branch1))
+                (if vertical-split (winnie-get-window-height branch1)
+                  (winnie-get-window-width branch1))
                 branch1-list
                 branch2-list)
         (or branch1-list branch2-list)))))
@@ -93,9 +93,9 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
 where the first element is the split direction, second is the size used as the
 argument of `split-winow'. The rest is a list of win-info, or another list with the given format.
 win-info has the format of (window-buffer-name file-name point window-start)."
-  (winnie-window-tree-to-list (car (window-tree)) (selected-window)))
+  (winnie-tree-to-list (car (window-tree)) (selected-window)))
 
-(defun winnie-trans-window-width (win)
+(defun winnie-get-window-width (win)
   "Obtain the width of window if the argument is `windowp', or calculate the width
 from the second element of output from `window-tree'."
   (if (windowp win)
@@ -103,7 +103,7 @@ from the second element of output from `window-tree'."
     (let ((edge (cadr win)))
       (- (cl-third edge) (first edge)))))
 
-(defun winnie-trans-window-height (win)
+(defun winnie-get-window-height (win)
   "Obtain the height of window if the argument is `windowp', or calculate the height
 from the second element of output from `window-tree'."
   (if (windowp win)
@@ -129,13 +129,19 @@ from the second element of output from `window-tree'."
     (and (equal (car conf-a) (car conf-b)) ; equal in split direction
          (let ((size-a (cadr conf-a))
                (size-b (cadr conf-b))
-               (others-a (nthcdr 3 conf-a))
-               (others-b (nthcdr 3 conf-b)))
+               (split-1-a (nthcdr 2 conf-a))
+               (split-1-b (nthcdr 2 conf-b))
+               (split-2-a (nthcdr 3 conf-a))
+               (split-2-b (nthcdr 3 conf-b)))
            (and (< (abs (- size-a size-b)) winnie-max-size-diff) ; equal in split size
-                (equal (length others-a) (length others-b))
-                (if (> (length others-a) 2)
-                    (winnie-equal others-a others-b)
-                  (winnie-equal (car others-a) (car others-b))))))))
+                (equal (length split-1-a) (length split-1-b))
+                (equal (length split-2-a) (length split-2-b))
+                (if (> (length split-1-a) 2)
+                    (winnie-equal split-1-a split-1-b)
+                  (winnie-equal (car split-1-a) (car split-1-b)))
+                (if (> (length split-2-a) 2)
+                    (winnie-equal split-2-a split-2-b)
+                  (winnie-equal (car split-2-a) (car split-2-b))))))))
 
 (defun winnie-find-index-for-conf (confs conf)
   "Return index of ITEM if on confs, else nil.
@@ -156,33 +162,32 @@ Comparison is done via `equal'.  The index is 0-based."
   ;; put in window-state-change-functions, at the time this function is run,
   ;; this-command has become last-command, this-command is nil
   (interactive)
-  (with-selected-frame frame
-    (let* ((winnie-busy (winnie-command-p last-command))
-           (winnie-idle (not winnie-busy))
-           (winnie-traverse-finish (and winnie-idle (not (equal winnie-traverse-position 0)))))
-      ;; promote conf at winnie-traverse-position
-      (when winnie-traverse-finish
-        (let* ((frame (selected-frame))
-               (confs (cdr (assoc frame winnie-alist)))
-               (conf (and confs (nth winnie-traverse-position confs))))
-          (setq confs (nth-delq winnie-traverse-position confs))
-          (setq winnie-traverse-position 0)
-          (push conf confs)
-          (alist-set 'winnie-alist frame confs)))
-      (unless (or (active-minibuffer-window)
-                  winnie-busy
-                  (minibufferp))
-        (unless (or (equal 'self-insert-command real-this-command)
-                    (winnie-command-p real-last-command))
+  (unless (equal 'self-insert-command real-this-command)
+    (or frame (setq frame (selected-frame)))
+    (with-selected-frame frame
+      (let* ((winnie-busy (winnie-command-p last-command))
+             (winnie-idle (not winnie-busy))
+             (winnie-traverse-finish (and winnie-idle (not (equal winnie-traverse-position 0)))))
+        ;; promote conf at winnie-traverse-position
+        (when winnie-traverse-finish
+          (let* ((frame (selected-frame))
+                 (confs (cdr (assoc frame winnie-alist)))
+                 (conf (and confs (nth winnie-traverse-position confs))))
+            (setq confs (nth-delq winnie-traverse-position confs))
+            (setq winnie-traverse-position 0)
+            (push conf confs)
+            (alist-set 'winnie-alist frame confs)))
+        (unless (or (active-minibuffer-window)
+                    winnie-busy
+                    (minibufferp))
           (let* ((frame (selected-frame))
                  (win (selected-window))
                  (conf (winnie-dump-window-tree))
                  (confs (cdr (assoc frame winnie-alist)))
                  (ind (winnie-find-index-for-conf confs conf)))
             (if ind
-                (progn
-                  (setq confs (nth-delq ind confs)))
-              (when (> (length confs) winnie-max-num)
+                (setq confs (nth-delq ind confs))
+              (when (> (length confs) winnie-max-conf-num)
                 (setq confs (butlast confs))))
             (push conf confs)
             (alist-set 'winnie-alist frame confs)))))))
@@ -195,7 +200,11 @@ Comparison is done via `equal'.  The index is 0-based."
 
 (defun winnie-set-relative (step)
   ;; reset on step equal 0
-  (cl-letf ((window-state-change-functions nil))
+  ;; window-state-change-functions is a hook that is run from redisplay.
+  ;; Redisplay runs asynchronously to your code. It looks up the global value of window-state-change-functions.
+  ;; To let-bound window-state-change-functions locally won't affect the global value.
+  (cl-letf ((window-state-change-functions nil)
+            (winnie-save nil))
     (let* ((confs (cdr (assoc (selected-frame) winnie-alist)))
            (winnie-length (length confs)))
       (if confs
@@ -212,12 +221,14 @@ Comparison is done via `equal'.  The index is 0-based."
   (interactive)
   (if (winnie-command-p last-command)
       (winnie-set-relative 1)
+    (winnie-save)
     (winnie-set-relative 1)))
 
 (defun winnie-next ()
   (interactive)
   (if (winnie-command-p last-command)
       (winnie-set-relative -1)
+    (winnie-save)
     (winnie-set-relative -1)))
 
 (defvar winnie-mode-map
