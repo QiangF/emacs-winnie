@@ -1,4 +1,4 @@
-;;; shackle.el --- Enforce rules for popups
+;;; shackle.el --- Enforce rules for popups  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2014 Vasilij Schneidermann <mail@vasilij.de>
 
@@ -266,6 +266,7 @@ before shackle get into action."
         window)
     (setq window
           (if (or pop-up-windows
+                  (cdr (assoc 'inhibit-same-window alist))
                   current-prefix-arg)
               (shackle--display-buffer-aligned-window buffer-or-name alist plist)
             (shackle--display-buffer-same buffer-or-name alist)))
@@ -290,20 +291,27 @@ before shackle get into action."
 
 (defvar shackle--display-plist nil)
 
-(defun shackle-display-buffer-condition (buffer action)
+(defun shackle-display-buffer-condition (buffer-or-name &optional action)
   "Return key-value pairs when BUFFER match any shackle condition.
 Uses `shackle-match'and `shackle-rules', BUFFER and ACTION take
 the form `display-buffer-alist' specifies."
-  (setq shackle--display-plist (shackle-match buffer)))
+  ;; (with-current-buffer buffer-or-name
+  ;;   (message "buffer: %s major-mode: %s" buffer-or-name major-mode))
+  (setq shackle--display-plist (shackle-match buffer-or-name)))
 
+;; see display-buffer
+;; inhibit-same-window is set in display-buffer when action is t
 (defun shackle-display-buffer-action (buffer alist)
   "Execute an action for BUFFER according to `shackle-rules'.
 This uses `shackle-display-buffer' internally, BUFFER and ALIST
 take the form `display-buffer-alist' specifies."
   ;; @my-modification
-  (unless (cdr (assoc 'shackle-off alist))
+  ;; override-shackle example:
+  ;; (display-buffer-use-some-window buffer '((lambda (buffer alist) nil) . ((override-shackle . t))))
+  (unless (plist-member shackle--display-plist :override-shackle)
     (let* ((shackle-previous-window (selected-window))
            (window (shackle-display-buffer buffer alist shackle--display-plist)))
+      ;; (message "alist is %s plist is %s" alist shackle--display-plist)
       (if (and (plist-get shackle--display-plist :select) (window-live-p window))
           (select-window window)
         (when (window-live-p shackle-previous-window)
@@ -429,6 +437,7 @@ the :size key with a number value."
   (let ((frame (shackle--splittable-frame)))
     (when frame
       (let* ((alignment-argument (plist-get plist :align))
+             (prefer-same (plist-get plist :prefer-same))
              (alignments '(above below left right))
              (alignment (cond
                          ((functionp alignment-argument)
@@ -465,7 +474,11 @@ the :size key with a number value."
                     (< (window-total-height (selected-window))
                        (window-size (frame-root-window))))
                   (progn
-                    (setq window (next-window nil 0)
+                    (setq window (if (and prefer-same
+                                          ;; dired-find-file-other-window
+                                          (not (cdr (assoc 'inhibit-same-window alist)))) 
+                                     (selected-window)
+                                   (next-window nil 0))
                           type 'reuse)
                     (when (window-dedicated-p window)
                       (setq window (next-window window 0))))

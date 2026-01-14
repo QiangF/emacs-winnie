@@ -1,5 +1,8 @@
 ;;; beacon.el --- Highlight the cursor whenever the window scrolls  -*- lexical-binding: t; -*-
 ;; URL: https://github.com/Malabarba/beacon
+;; use beacon-backward-forward-previous beacon-backward-forward-next to jump
+;; to previous and next beacon blinking positions, use keyboard-quit to abort the process
+;; and go back to where the jump starts
 
 (require 'cl-lib)
 (require 'seq)
@@ -311,6 +314,8 @@ mark whenever point moves more than that many lines."
     (unless supress
       (message "%s" msg))))
 
+(defvar beacon--near-mark-line-distance 3)
+
 (defun beacon--push-mark (&optional location nomsg activate)
   "Handles mark-tracking work for backward-forward.
 ignores its arguments LOCATION, NOMSG, ACTIVATE
@@ -321,25 +326,49 @@ pushes the just-created mark by `push-mark' onto beacon-markers
 note that perhaps this should establish one mark list per window in the future"
   (when (and (not mark-active)
              (not (beacon--backward-forward-command-p this-command)))
-    (let* ((marker (copy-marker (or location (point))))
-           (ind (beacon--find-index-for-mark marker beacon-markers))
-           (history-delete-duplicates nil))
-      (if ind
-          (setq beacon-markers (beacon--nth-delq ind beacon-markers))
-        (when (> (length beacon-markers) beacon-markers-max-num)
-          ;;purge excess entries from the end of the list
-          ;; (when (> (length beacon-markers) beacon-markers-max-num)
-          ;;   (move-marker (car (nthcdr beacon-markers-max-num beacon-markers)) nil)
-          ;;   (setcdr (nthcdr (1- beacon-markers-max-num) beacon-markers) nil))
-          (set-marker (car (last beacon-markers)) nil)
-          (setq beacon-markers (butlast beacon-markers))))
-      (beacon--debug (format "beacon: save marker %s" marker))
+    (let* ((marker1 (copy-marker (or location (point))))
+           (history-delete-duplicates nil) deduplicated-markers)
+      (dotimes (ind (length beacon-markers))
+        (let ((marker2 (nth ind beacon-markers)))
+          (when (if (equal ind 0)
+                    (not (equal (marker-position marker1) (marker-position marker2)))
+                  (> (abs (count-lines (marker-position marker1) (marker-position marker2)))
+                     beacon--near-mark-line-distance))
+            (push marker2 deduplicated-markers))))
+      (setq beacon-markers deduplicated-markers)
+      (when (> (length beacon-markers) beacon-markers-max-num)
+        ;;purge excess entries from the end of the list
+        ;; (when (> (length beacon-markers) beacon-markers-max-num)
+        ;;   (move-marker (car (nthcdr beacon-markers-max-num beacon-markers)) nil)
+        ;;   (setcdr (nthcdr (1- beacon-markers-max-num) beacon-markers) nil))
+        (set-marker (car (last beacon-markers)) nil)
+        (setq beacon-markers (butlast beacon-markers)))
+      (beacon--debug (format "beacon: save marker %s" marker1))
       ;; (setq beacon-markers (cons (copy-marker marker) beacon-markers))
       ;; (add-to-history 'beacon-markers (copy-marker marker) beacon-markers-max-num)
-      (push marker beacon-markers))))
+      (push marker1 beacon-markers))))
 
 (defun beacon--nth-delq (n list-in)
   (delq (setcar (nthcdr n list-in) (gensym)) list-in))
+
+(defun delete-items-by-indices (original-list indices-to-remove)
+  "Return a new list with elements removed at the specified INDEXES-TO-REMOVE.
+Indices are 0-based. The indices-to-remove list should ideally be sorted
+for efficiency and clarity, though the function handles unsorted indices."
+  (let* ((sorted-indices (sort (delete-dups indices-to-remove) #'<)) ; Sort and remove duplicates
+         (result-list nil)
+         (current-index 0)
+         (indices-head sorted-indices))
+    (dolist (item original-list)
+      ;; Check if the current index matches the next index to remove
+      (if (and indices-head (= current-index (car indices-head)))
+          ;; If it matches, skip this item and move to the next index to remove
+          (setq indices-head (cdr indices-head))
+        ;; Otherwise, add the item to the result list
+        (push item result-list))
+      (setq current-index (1+ current-index)))
+    ;; The result is built in reverse, so reverse it back
+    (nreverse result-list)))
 
 (defun remove-nth-element (nth list)
   (if (zerop nth) (cdr list)
@@ -373,11 +402,29 @@ Borrows code from `pop-global-mark'."
                      (marker-position marker2))
           (throw 'found ind))))))
 
+(defun line-distance-between-markers (marker1 marker2)
+  "Calculate the line distance between two markers in the same buffer.
+Returns the absolute number of lines between the two markers.
+If the markers are in different buffers, returns nil."
+  (let ((pos1 (marker-position marker1))
+        (pos2 (marker-position marker2))
+        (buffer1 (marker-buffer marker1))
+        (buffer2 (marker-buffer marker2)))
+
+    ;; Ensure both markers are in the same buffer
+    (if (and buffer1 buffer2 (eq buffer1 buffer2))
+        (with-current-buffer buffer1
+          ;; Use abs for absolute distance, and
+          ;; count-lines gives the number of lines between start and end.
+          (abs (count-lines pos1 pos2)))
+      ;; Return nil if not in the same buffer, or if one is invalid
+      nil)))
+
 (defun beacon--backward-forward-command-p (cmd)
   (or (equal cmd 'beacon-backward-forward-previous)
       (equal cmd 'beacon-backward-forward-next)))
 
-(defun beacon-backward-forward-next ()
+(defun beacon-backward-forward-previous ()
   "A `beacon-increase-mark-position' wrap for skip invalid locations."
   (interactive)
   ;; (message "this command %s" this-command)
@@ -385,11 +432,11 @@ Borrows code from `pop-global-mark'."
     (setq beacon-mark-traversal-position 0))
   (beacon-increase-mark-position -1))
 
-(defun beacon-backward-forward-previous ()
+(defun beacon-backward-forward-next ()
   "A `beacon-increase-mark-position' wrap for skip invalid locations."
   (interactive)
   (when (not (beacon--backward-forward-command-p last-command))
-    (setq beacon-mark-traversal-position -1))
+    (setq beacon-mark-traversal-position 0))
   (beacon-increase-mark-position 1))
 
 (defun beacon--scroll-command-p (cmd)
