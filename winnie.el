@@ -52,7 +52,7 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
     (winnie-list-to-tree (nth winnie-position confs)
                            (selected-window)
                            scratch-buf)
-    (message "Win-config %s / %s" (+ 1 winnie-position) winnie-length)))
+    (message "Winnie %s / %s" winnie-position winnie-length)))
 
 (defun winnie-tree-to-list (tree selected)
   "TREE is the output of `window-tree' except `minibuffer'."
@@ -189,18 +189,19 @@ Comparison is done via `equal'.  The index is 0-based."
 
 ;; when put in window-state-change-functions, at the time this function is run,
 ;; this-command has become last-command, this-command is nil
-(defun winnie-save-for-window-state-change ()
+(defun winnie-save-for-window-state-change (&optional args)
   (interactive)
-  (unless (equal 'self-insert-command real-this-command)
+  (unless (or (equal 'self-insert-command real-this-command)
+              (winnie-command-p last-command))
     (unless winnie-traverse-promoted
-        ;; promote last conf at winnie-traverse-position
-        (let* ((frame (selected-frame))
-               (confs (cdr (assoc frame winnie-alist)))
-               (conf (and confs (nth winnie-traverse-position confs))))
-          (setq confs (nth-delq winnie-traverse-position confs))
-          (setq winnie-traverse-promoted t)
-          (push conf confs)
-          (alist-set 'winnie-alist frame confs)))
+      ;; promote last conf at winnie-traverse-position
+      (let* ((frame (selected-frame))
+             (confs (cdr (assoc frame winnie-alist)))
+             (conf (and confs (nth winnie-traverse-position confs))))
+        (setq confs (nth-delq winnie-traverse-position confs))
+        (setq winnie-traverse-promoted t)
+        (push conf confs)
+        (alist-set 'winnie-alist frame confs)))
     (winnie-save-current)))
 
 (defun alist-set (alist-symbol key value)
