@@ -5,7 +5,7 @@
 (defvar winnie-alist nil)
 (setq winnie-max-conf-num 20)
 (defvar winnie-traverse-position 0)
-(defvar winnie-traverse-promoted nil)
+(defvar winnie-traverse-promoted t)
 (setq winnie-boring-buffers '("*Completions*" "*lispy-message*"))
 (setq winnie-boring-buffers-regexp "^ \\*")
 
@@ -83,7 +83,7 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
            (branch2 (cdr children))
            (branch1-list (winnie-tree-to-list branch1 selected))
            (branch2-list (if (> (length branch2) 1)
-                             (winnie-tree-to-list (cons vertical-split (cons nil branch2)))
+                             (winnie-tree-to-list (cons vertical-split (cons nil branch2)) selected)
                            (winnie-tree-to-list (car branch2) selected))))
       (if (and branch1-list branch2-list)
           (list (if vertical-split 'v 'h)
@@ -170,11 +170,11 @@ Comparison is done via `equal'.  The index is 0-based."
   (declare (gv-setter (lambda (store) `(if ,store (activate-mark) (deactivate-mark)))))
   (region-active-p))
 
-;; winnie saves at traverse-beginning and window-state-change-functions that triggers not by traversing
-(defun winnie-save-current ()
+;; winnie saves at traverse-beginning and window-state-change-hook that triggers not by traversing
+(defun winnie-save-current (&optional frame)
   (interactive)
   (unless (active-minibuffer-window)
-    (let* ((frame (selected-frame))
+    (let* ((frame (or frame (selected-frame)))
            (win (selected-window))
            (conf (winnie-dump-window-tree))
            (confs (cdr (assoc frame winnie-alist)))
@@ -187,9 +187,9 @@ Comparison is done via `equal'.  The index is 0-based."
       (push conf confs)
       (alist-set 'winnie-alist frame confs))))
 
-;; when put in window-state-change-functions, at the time this function is run,
+;; when put in window-state-change-hook, at the time this function is run,
 ;; this-command has become last-command, this-command is nil
-(defun winnie-save-for-window-state-change (&optional args)
+(defun winnie-save-for-window-state-change (&optional frame-or-window)
   (interactive)
   (unless (or (equal 'self-insert-command real-this-command)
               (winnie-command-p last-command))
@@ -212,11 +212,11 @@ Comparison is done via `equal'.  The index is 0-based."
 
 (defun winnie-set-relative (step)
   ;; reset on step equal 0
-  ;; window-state-change-functions is a hook that is run from redisplay.
+  ;; window-state-change-hook is a hook that is run from redisplay.
   ;; Redisplay runs asynchronously to your code. It looks up the global value of window-state-change-functions.
-  ;; To let-bound window-state-change-functions locally won't affect the global value.
+  ;; To let-bound window-state-change-hook locally won't affect the global value.
   (cl-letf (;; supress winnie save in window state change functions
-            (window-state-change-functions (remove 'winnie-save-for-window-state-change window-state-change-functions)))
+            (window-state-change-hook (remove 'winnie-save-for-window-state-change window-state-change-hook)))
     (let* ((confs (cdr (assoc (selected-frame) winnie-alist)))
            (winnie-length (length confs)))
       (if confs
@@ -270,9 +270,9 @@ into windows)."
   :global t
   (if winnie-mode
       (progn
-        (add-hook 'window-state-change-functions 'winnie-save-for-window-state-change)
+        (add-hook 'window-state-change-hook 'winnie-save-for-window-state-change)
         (advice-add #'keyboard-quit :before #'winnie-keyboard-quit))
-    (remove-hook 'window-state-change-functions 'winnie-save-for-window-state-change)
+    (remove-hook 'window-state-change-hook 'winnie-save-for-window-state-change)
     (advice-remove #'keyboard-quit #'winnie-keyboard-quit)))
 
 (provide 'winnie)
