@@ -3,6 +3,7 @@
 ;; use beacon-backward-forward-previous beacon-backward-forward-next to jump
 ;; to previous and next beacon blinking positions, use keyboard-quit to abort the process
 ;; and go back to where the jump starts
+;; https://github.com/Overdr0ne/gumshoe
 
 (require 'cl-lib)
 (require 'seq)
@@ -335,7 +336,7 @@ note that perhaps this should establish one mark list per window in the future"
                   (> (abs (count-lines (marker-position marker1) (marker-position marker2)))
                      beacon--near-mark-line-distance))
             (push marker2 deduplicated-markers))))
-      (setq beacon-markers deduplicated-markers)
+      (setq beacon-markers (reverse deduplicated-markers))
       (when (> (length beacon-markers) beacon-markers-max-num)
         ;;purge excess entries from the end of the list
         ;; (when (> (length beacon-markers) beacon-markers-max-num)
@@ -427,17 +428,18 @@ If the markers are in different buffers, returns nil."
 (defun beacon-backward-forward-previous ()
   "A `beacon-increase-mark-position' wrap for skip invalid locations."
   (interactive)
+  ;; new item is pushed to the front of beacon-markers
   ;; (message "this command %s" this-command)
   (when (not (beacon--backward-forward-command-p last-command))
-    (setq beacon-mark-traversal-position 0))
-  (beacon-increase-mark-position -1))
+    (setq beacon-mark-traversal-position -1))
+  (beacon-increase-mark-position 1))
 
 (defun beacon-backward-forward-next ()
   "A `beacon-increase-mark-position' wrap for skip invalid locations."
   (interactive)
   (when (not (beacon--backward-forward-command-p last-command))
     (setq beacon-mark-traversal-position 0))
-  (beacon-increase-mark-position 1))
+  (beacon-increase-mark-position -1))
 
 (defun beacon--scroll-command-p (cmd)
   (or (equal cmd 'scroll-up-command)
@@ -457,14 +459,14 @@ If the markers are in different buffers, returns nil."
 (defun beacon--post-command ()
   "Blink if point moved very far."
   (unless (minibufferp)
-    ;; (message "beacon--push-mark %S" marker)
+    ;; (message "this-command %s last-command %s" this-command last-command)
     ;; based on push-mark
     (if (and (equal this-command 'keyboard-quit)
              (beacon--backward-forward-command-p last-command)
              beacon-last-mark-before-jump)
         ;; quick way to get back
         (progn (goto-char beacon-last-mark-before-jump)
-               (beacon--debug "beacon: quit")
+               (beacon--debug "beacon: quit and go back to last point before jump")
                (beacon-blink))
       (cond
        ;; Blink for switching buffers.
