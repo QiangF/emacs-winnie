@@ -17,9 +17,11 @@
          (buf-file-name (nth 1 win-info))
          (buf-point (nth 2 win-info))
          (window-start (nth 3 win-info))
-         (selected (nth 4 win-info)))
+         (selected (nth 4 win-info))
+         (dedicated (nth 5 win-info)))
     (cond (buf
-           (set-window-buffer win buf))
+           (progn (set-window-buffer win buf)
+                  (and dedicated (set-window-dedicated-p win t))))
           (buf-file-name
            (set-window-buffer win (if (directory-name-p buf-file-name)
                                       (dired-internal-noselect buf-file-name)
@@ -34,8 +36,8 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
       (winnie-set-winbuf win conf fallback-buf)
     (let* ((horizontal (eq (car conf) 'h))
            (newwin (split-window win
-                                 (if horizontal (cadr conf) (cadr conf))
-                                 ;; (if horizontal (+ (cadr conf) 1) (+ (cadr conf) 1))
+                                 ;; (if horizontal (cadr conf) (cadr conf))
+                                 (if horizontal (+ (cadr conf) 1) (cadr conf))
                                  horizontal))
            (others (nthcdr 3 conf)))
       (winnie-list-to-tree (cl-third conf) win fallback-buf)
@@ -60,10 +62,11 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
       (with-selected-window tree
         (let ((buf-name (if (eq major-mode 'exwm-mode)
                             exwm--id
-                            (buffer-name)))
+                          (buffer-name)))
               (file-name (or (buffer-file-name)
                              (and (equal major-mode 'dired-mode)
-                                  default-directory))))
+                                  default-directory)))
+              (dedicated (window-dedicated-p)))
           (unless (and
                    ;; exwm-mode buffer has exwm--id as the buf-name
                    (stringp buf-name)
@@ -76,7 +79,8 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
                        (abbreviate-file-name file-name))
                   (point)
                   (window-start)
-                  (equal tree selected)))))
+                  (equal tree selected)
+                  dedicated))))
     (let* ((vertical-split (car tree))
            (children (cddr tree))
            (branch1 (car children))

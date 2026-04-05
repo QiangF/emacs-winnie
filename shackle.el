@@ -1,40 +1,11 @@
 ;;; shackle.el --- Enforce rules for popups  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2014 Vasilij Schneidermann <mail@vasilij.de>
-
 ;; Author: Vasilij Schneidermann <mail@vasilij.de>
 ;; URL: https://depp.brause.cc/shackle
-;; Version: 1.0.3
-;; Keywords: convenience
-;; Package-Requires: ((emacs "24.3") (cl-lib "0.5"))
-
-;; This file is NOT part of GNU Emacs.
-
-;; This file is free software; you can redistribute it and/or modify
-;; it under the terms of the GNU General Public License as published by
-;; the Free Software Foundation; either version 3, or (at your option)
-;; any later version.
-
-;; This file is distributed in the hope that it will be useful,
-;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-;; GNU General Public License for more details.
-
-;; You should have received a copy of the GNU General Public License
-;; along with GNU Emacs; see the file COPYING. If not, write to
-;; the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
-;; Boston, MA 02111-1307, USA.
-
-;;; Commentary:
-
-;; This global minor mode allows you to easily set up rules for
-;; popups in Emacs.
-
-;; See the README for more info: https://depp.brause.cc/shackle
-
-;;; Code:
 
 (require 'cl-lib)
+(require 'cl-extra)
 
 (defgroup shackle nil
   "Enforce rules for popups"
@@ -245,12 +216,11 @@ If there is a match, it returns a property list which
 `shackle-display-buffer-action' use."
   (let* ((buffer (get-buffer buffer-or-name)))
     (cl-loop for (condition . plist) in shackle-rules
-             when (or (and (symbolp condition)
-                           (eq condition (buffer-local-value 'major-mode buffer)))
-                      (and (stringp condition)
-                           (or (string= condition (buffer-name buffer))
-                               (and (plist-get plist :regexp)
-                                    (string-match condition (buffer-name buffer))))))
+             when (cond ((symbolp condition)
+                         (eq condition (buffer-local-value 'major-mode buffer)))
+                        ((stringp condition)
+                         (string-match condition (buffer-name buffer)))
+                        (t nil))
              return plist
              finally return shackle-default-rule)))
 
@@ -291,6 +261,12 @@ before shackle get into action."
 
 (defvar shackle--display-plist nil)
 
+;; shackle plist key can be put in the action argument of pop-to-buffer etc.
+;; eg.
+;; (action '(shackle-display-buffer-action
+;;           (align . right)
+;;           (inhibit-same-window . t)))
+
 (defun shackle-display-buffer-condition (buffer-or-name &optional action)
   "Return key-value pairs when BUFFER match any shackle condition.
 Uses `shackle-match'and `shackle-rules', BUFFER and ACTION take
@@ -299,20 +275,45 @@ the form `display-buffer-alist' specifies."
   ;;   (message "buffer: %s major-mode: %s" buffer-or-name major-mode))
   (setq shackle--display-plist (shackle-match buffer-or-name)))
 
-;; see display-buffer
+;; shackle action is the user-action that is handled first in display-buffer
+;; if shackle action fails to provide a window, display-buffer moves on to next action
+(defvar shackle--bypass-shackle-keys
+  '(window window-width window-height same-window
+           side slot dedicated direction
+           some-window same-window same-frame
+           previous-window lru-frames lru-time bump-use-time allow-no-window))
+
+;; other alist keys:
+;; window-min-height window-min-width inhibit-same-window inhibit-switch-frame
+;; mode pop-up-frame-parameters child-frame-parameters
+
+;; ref:
+;; display-buffer-in-atom-window special-display-popup-frame window--pop-up-frames
+;; display-buffer-use-some-frame display-buffer-reuse-window display-buffer-reuse-mode-window
+;; display-buffer-pop-up-frame display-buffer-in-child-frame
+;; window--try-to-split-window-in-direction display-buffer-in-previous-window
+;; display-buffer--lru-window display-buffer-use-some-window display-buffer-use-least-recent-window
+;; display-buffer-no-window
+
 ;; inhibit-same-window is set in display-buffer when action is t
+;; @my-modification
+;; override-shackle example:
+;; (display-buffer-use-some-window buffer '((lambda (buffer alist) nil) . ((override-shackle . t))))
+;; (cdr (assoc 'shackle-off alist))
 (defun shackle-display-buffer-action (buffer alist)
   "Execute an action for BUFFER according to `shackle-rules'.
 This uses `shackle-display-buffer' internally, BUFFER and ALIST
-take the form `display-buffer-alist' specifies."
-  ;; @my-modification
-  ;; override-shackle example:
-  ;; (display-buffer-use-some-window buffer '((lambda (buffer alist) nil) . ((override-shackle . t))))
-  (unless (plist-member shackle--display-plist :override-shackle)
+take the form `display-buffer-alist' specifies.
+`shackle--display-plist' was set in the match function
+`shackle-display-buffer-condition'."
+  (unless (or (plist-member shackle--display-plist :override-shackle)
+              (cl-some (lambda (key) (assoc key alist)) shackle--bypass-shackle-keys))
     (let* ((shackle-previous-window (selected-window))
            (window (shackle-display-buffer buffer alist shackle--display-plist)))
       ;; (message "alist is %s plist is %s" alist shackle--display-plist)
-      (if (and (plist-get shackle--display-plist :select) (window-live-p window))
+      (if (and (or (plist-get shackle--display-plist :select)
+                   (alist-get 'select alist))
+               (window-live-p window))
           (select-window window)
         (when (window-live-p shackle-previous-window)
           (select-window shackle-previous-window))))))
@@ -436,7 +437,8 @@ default one in `shackle-default-alignment' and/or PLIST contains
 the :size key with a number value."
   (let ((frame (shackle--splittable-frame)))
     (when frame
-      (let* ((alignment-argument (plist-get plist :align))
+      (let* ((alignment-argument (or (plist-get plist :align)
+                                     (alist-get 'align alist)))
              (prefer-same (plist-get plist :prefer-same))
              (alignments '(above below left right))
              (alignment (cond
@@ -476,7 +478,7 @@ the :size key with a number value."
                   (progn
                     (setq window (if (and prefer-same
                                           ;; dired-find-file-other-window
-                                          (not (cdr (assoc 'inhibit-same-window alist)))) 
+                                          (not (cdr (assoc 'inhibit-same-window alist))))
                                      (selected-window)
                                    (next-window nil 0))
                           type 'reuse)
@@ -505,7 +507,8 @@ Displays BUFFER according to ALIST and PLIST."
         (user-error "Custom action didn't return window: %S %S" window action))
       window))
    ((shackle--display-buffer-reuse buffer alist))
-   ((plist-get plist :align)
+   ((or (plist-get plist :align)
+        (alist-get 'align alist))
     (shackle--display-buffer-aligned-window buffer alist plist))
    ((or (plist-get plist :same)
         ;; there is `display-buffer--same-window-action' which things
@@ -517,7 +520,7 @@ Displays BUFFER according to ALIST and PLIST."
                   (not (cdr (assq 'inhibit-same-window alist))))))
     (shackle--display-buffer-same buffer alist))
    ((plist-get plist :maximize)
-       (display-buffer-full-frame buffer alist))
+    (display-buffer-full-frame buffer alist))
    ((plist-get plist :ignore) 'fail)
    ((plist-get plist :popup-frame)
     (funcall shackle-display-buffer-popup-frame-function buffer alist plist))
