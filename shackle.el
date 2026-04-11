@@ -283,9 +283,16 @@ the form `display-buffer-alist' specifies."
            some-window same-window same-frame
            previous-window lru-frames lru-time bump-use-time allow-no-window))
 
+(defvar override-shackle nil
+  "flag variable for overriding shackle in a function.
+use shackle--display-plist for overriding shackle rules.")
+(defun shackle-override-advice (orig-fun &rest args)
+  (let ((override-shackle t))
+    (apply orig-fun args)))
+
 ;; other alist keys:
-;; window-min-height window-min-width inhibit-same-window inhibit-switch-frame
-;; mode pop-up-frame-parameters child-frame-parameters
+;; window-min-height window-min-width inhibit-switch-frame
+;; mode pop-up-frame-parameters child-frame-parameters inhibit-same-window
 
 ;; ref:
 ;; display-buffer-in-atom-window special-display-popup-frame window--pop-up-frames
@@ -296,17 +303,18 @@ the form `display-buffer-alist' specifies."
 ;; display-buffer-no-window
 
 ;; inhibit-same-window is set in display-buffer when action is t
-;; @my-modification
 ;; override-shackle example:
 ;; (display-buffer-use-some-window buffer '((lambda (buffer alist) nil) . ((override-shackle . t))))
-;; (cdr (assoc 'shackle-off alist))
+;; (cdr (assoc 'override-shackle alist))
+;; dired find file alist is ((inhibit-same-window))
 (defun shackle-display-buffer-action (buffer alist)
   "Execute an action for BUFFER according to `shackle-rules'.
 This uses `shackle-display-buffer' internally, BUFFER and ALIST
 take the form `display-buffer-alist' specifies.
 `shackle--display-plist' was set in the match function
 `shackle-display-buffer-condition'."
-  (unless (or (plist-member shackle--display-plist :override-shackle)
+  (unless (or override-shackle
+              (plist-member shackle--display-plist :override-shackle)
               (cl-some (lambda (key) (assoc key alist)) shackle--bypass-shackle-keys))
     (let* ((shackle-previous-window (selected-window))
            (window (shackle-display-buffer buffer alist shackle--display-plist)))
