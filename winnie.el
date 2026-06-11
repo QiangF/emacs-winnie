@@ -5,8 +5,7 @@
 (defvar winnie-alist nil)
 (setq winnie-max-conf-num 20)
 (defvar winnie-traverse-position 0)
-(defvar winnie-traverse-promoted t)
-(setq winnie-boring-buffers '("*Completions*" "*lispy-message*"))
+(setq winnie-boring-buffers '("*Completions*" "*lispy-message*" "*Ilist*"))
 (setq winnie-boring-buffers-regexp "^ \\*")
 
 (defun winnie-set-winbuf (win win-info fallback-buf)
@@ -63,7 +62,7 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
         (let ((buf-name (if (eq major-mode 'exwm-mode)
                             exwm--id
                           (buffer-name)))
-              (file-name (or (buffer-file-name)
+              (file-name (or buffer-file-name
                              (and (equal major-mode 'dired-mode)
                                   default-directory)))
               (dedicated (window-dedicated-p)))
@@ -183,6 +182,7 @@ Comparison is done via `equal'.  The index is 0-based."
            (conf (winnie-dump-window-tree))
            (confs (cdr (assoc frame winnie-alist)))
            (ind (winnie-find-index-for-conf confs conf)))
+      ;; (notify "winnie save" (format "ind %s" ind))
       (if ind
           (setq confs (nth-delq ind confs))
         (when (> (length confs) winnie-max-conf-num)
@@ -197,15 +197,7 @@ Comparison is done via `equal'.  The index is 0-based."
   (interactive)
   (unless (or (equal 'self-insert-command real-this-command)
               (winnie-command-p last-command))
-    (unless winnie-traverse-promoted
-      ;; promote last conf at winnie-traverse-position
-      (let* ((frame (selected-frame))
-             (confs (cdr (assoc frame winnie-alist)))
-             (conf (and confs (nth winnie-traverse-position confs))))
-        (setq confs (nth-delq winnie-traverse-position confs))
-        (setq winnie-traverse-promoted t)
-        (push conf confs)
-        (alist-set 'winnie-alist frame confs)))
+    ;; (message "Winnie real cmd %s last-cmd %s" real-this-command last-command)
     (winnie-save-current)))
 
 (defun alist-set (alist-symbol key value)
@@ -239,7 +231,6 @@ Comparison is done via `equal'.  The index is 0-based."
       (winnie-set-relative 1)
     (winnie-save-current)
     (setq winnie-traverse-position 0)
-    (setq winnie-traverse-promoted nil)
     (winnie-set-relative 1)))
 
 (defun winnie-next ()
@@ -248,7 +239,6 @@ Comparison is done via `equal'.  The index is 0-based."
       (winnie-set-relative -1)
     (winnie-save-current)
     (setq winnie-traverse-position 0)
-    (setq winnie-traverse-promoted nil)
     (winnie-set-relative -1)))
 
 (defvar winnie-mode-map
@@ -261,8 +251,7 @@ Comparison is done via `equal'.  The index is 0-based."
 (defun winnie-keyboard-quit (&rest arg)
   "Abort window conf jumping, and go back to conf before jump."
   (when (winnie-command-p last-command)
-    (winnie-set-relative 0)
-    (setq winnie-traverse-promoted t)))
+    (winnie-set-relative 0)))
 
 ;;;###autoload
 (define-minor-mode winnie-mode

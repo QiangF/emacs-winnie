@@ -1,6 +1,4 @@
 ;;; shackle.el --- Enforce rules for popups  -*- lexical-binding: t; -*-
-
-;; Copyright (C) 2014 Vasilij Schneidermann <mail@vasilij.de>
 ;; Author: Vasilij Schneidermann <mail@vasilij.de>
 ;; URL: https://depp.brause.cc/shackle
 
@@ -29,29 +27,11 @@ present."
   :type 'boolean
   :group 'shackle)
 
-(defcustom shackle-default-alignment 'below
-  "Default alignment of aligned windows.
-It may be one of the following values:
+(defvar shackle-default-alignment 'below
+  "Default alignment of window relative to the selected window.
+It may be one of the following values: 'above, 'below, 'left, 'right.
+Or use a <function> with no arguments to determine side, must return one of the above four values.")
 
-'above: Align above the currently selected window.
-
-'below: Align below the currently selected window.
-
-'left: Align on the left side of the currently selected window.
-
-'right: Align on the right side of the currently selected
-window.
-
-<function>: Call the specified function with no arguments to
-determine side, must return one of the above four values."
-  :type '(choice (const :tag "Above" above)
-                 (const :tag "Below" below)
-                 (const :tag "Left" left)
-                 (const :tag "Right" right))
-  :group 'shackle)
-
-(define-obsolete-variable-alias 'shackle-default-ratio 'shackle-default-size
-  "0.9.0")
 (defcustom shackle-default-size 0.5
   "Default size of aligned windows.
 A floating point number between 0 and 1 is interpreted as a
@@ -63,7 +43,19 @@ zero arguments and must return a number of the above two types."
                  (function :tag "Custom"))
   :group 'shackle)
 
-(defcustom shackle-rules nil
+;; hide *Warnings* buffer
+;; (add-to-list 'display-buffer-alist '("*Warnings*" . nil))
+;; if mutiple match, rule at the front takes precedence
+(defvar shackle-default-rules
+  '(;; embark buffer doens't have fixed buffer name or major mode
+    ;; embark--verbose-indicator-buffer
+    ("\\*Embark Actions\\*" :override-shackle)
+    ("\\`\\*Warnings.*?\\*\\'" :ignore t)
+    (" \\*LV\\*" :override-shackle)
+    ("\\*Ediff Control Panel\\*" :override-shackle)
+    ("^\\*Ilist\\*$" :override-shackle)
+    (dired-mode :custom shackle--custom-display-dired
+                :align left :select t))
   "Association list of rules what to do with windows.
 Each rule consists of a condition and a property list.  The
 condition can be a symbol, a string or a list of either type.  If
@@ -145,59 +137,10 @@ value of 0.5 (see `shackle-default-size').
 
 :popup-frame and t
 
-Pop to a frame instead of window."
-  :type '(alist :key-type (choice :tag "Condition"
-                                  (symbol :tag "Major mode")
-                                  (string :tag "Buffer name")
-                                  (repeat (choice
-                                           (symbol :tag "Major mode")
-                                           (string :tag "Buffer name")))
-                                  (list :tag "Custom function"
-                                        (const :tag "Custom" :custom) function))
-                :value-type (plist :options
-                                   (((const :tag "Regexp" :regexp) boolean)
-                                    ((const :tag "Select" :select) boolean)
-                                    ((const :tag "Custom" :custom) function)
-                                    ((const :tag "Inhibit window quit" :inhibit-window-quit) boolean)
-                                    ((const :tag "Ignore" :ignore) boolean)
-                                    ((const :tag "Other" :other) boolean)
-                                    ((const :tag "Same" :same) boolean)
-                                    ((const :tag "Popup" :popup) boolean)
-                                    ((const :tag "Align" :align)
-                                     (choice :tag "Alignment" :value t
-                                             (const :tag "Default" t)
-                                             (const :tag "Above" 'above)
-                                             (const :tag "Below" 'below)
-                                             (const :tag "Left" 'left)
-                                             (const :tag "Right" 'right)
-                                             (function :tag "Function")))
-                                    ((const :tag "Size" :size) number)
-                                    ((const :tag "Frame" :popup-frame) boolean))))
-  :group 'shackle)
-
-(defcustom shackle-default-rule nil
-  "Default rule to use when no other matching rule found.
-It's a plist with the same keys and values as described in
-`shackle-rules'."
-  :type '(plist :options (((const :tag "Regexp" :regexp) boolean)
-                          ((const :tag "Select" :select) boolean)
-                          ((const :tag "Custom" :custom) function)
-                          ((const :tag "Inhibit window quit" :inhibit-window-quit) boolean)
-                          ((const :tag "Ignore" :ignore) boolean)
-                          ((const :tag "Other" :other) boolean)
-                          ((const :tag "Same" :same) boolean)
-                          ((const :tag "Popup" :popup) boolean)
-                          ((const :tag "Align" :align)
-                           (choice :value t
-                                   (const :tag "Default" t)
-                                   (const :tag "Above" 'above)
-                                   (const :tag "Below" 'below)
-                                   (const :tag "Left" 'left)
-                                   (const :tag "Right" 'right)
-                                   (function :tag "Function")))
-                          ((const :tag "Size" :size) number)
-                          ((const :tag "Frame" :popup-frame) boolean)))
-  :group 'shackle)
+Pop to a frame instead of window.")
+(defvar shackle-default-rule '(:align right :select t))
+(defvar shackle-rules shackle-default-rules)
+(setq pop-up-windows nil)
 
 (defcustom shackle-display-buffer-popup-frame-function
   'shackle--display-buffer-popup-frame
@@ -235,11 +178,12 @@ before shackle get into action."
   (let ((old-buffer (current-buffer))
         window)
     (setq window
-          (if (or pop-up-windows
-                  (cdr (assoc 'inhibit-same-window alist))
-                  current-prefix-arg)
-              (shackle--display-buffer-aligned-window buffer-or-name alist plist)
-            (shackle--display-buffer-same buffer-or-name alist)))
+          ;; pop-up-windows is used inswitch-to-buffer-other-window
+          (cond ((or pop-up-windows
+                     (cdr (assoc 'inhibit-same-window alist))
+                     current-prefix-arg)
+                 (shackle--display-buffer-aligned-window buffer-or-name alist plist))
+                (t (shackle--display-buffer-same buffer-or-name alist))))
     ;; (if (or revert-buffer-in-progress-p
     ;;         (and dired-kill-old-on-new-buffer (equal major-mode 'dired-mode)
     ;;              (not (string-equal "*Fd*" (buffer-name)))))
@@ -283,12 +227,28 @@ the form `display-buffer-alist' specifies."
            some-window same-window same-frame
            previous-window lru-frames lru-time bump-use-time allow-no-window))
 
+;; 3 ways to override: 1. let override-shackle to t, 2. ((override-shackle . t)) alist 3. (:override-shackle) in shackle-rules
 (defvar override-shackle nil
   "flag variable for overriding shackle in a function.
 use shackle--display-plist for overriding shackle rules.")
 (defun shackle-override-advice (orig-fun &rest args)
   (let ((override-shackle t))
     (apply orig-fun args)))
+
+(with-eval-after-load 'button
+  (advice-add 'button-activate :around 'shackle-override-advice))
+
+(defun shackle-switch-to-buffer-advice (orig-fun &rest args)
+  (if (called-interactively-p 'any)
+      (let ((override-shackle t))
+        (apply orig-fun args))
+    (apply orig-fun args)))
+
+(with-eval-after-load 'consult
+  (advice-add 'consult-buffer :around #'shackle-switch-to-buffer-advice))
+
+(with-eval-after-load 'exwm-workspace
+  (advice-add 'exwm-workspace-switch-to-buffer :around #'shackle-switch-to-buffer-advice))
 
 ;; other alist keys:
 ;; window-min-height window-min-width inhibit-switch-frame
@@ -318,13 +278,22 @@ take the form `display-buffer-alist' specifies.
               (cl-some (lambda (key) (assoc key alist)) shackle--bypass-shackle-keys))
     (let* ((shackle-previous-window (selected-window))
            (window (shackle-display-buffer buffer alist shackle--display-plist)))
-      ;; (message "alist is %s plist is %s" alist shackle--display-plist)
+      ;; (message "shackle buffer %s\n alist: %s\n plist: %s" buffer alist shackle--display-plist)
       (if (and (or (plist-get shackle--display-plist :select)
                    (alist-get 'select alist))
                (window-live-p window))
           (select-window window)
         (when (window-live-p shackle-previous-window)
-          (select-window shackle-previous-window))))))
+          (select-window shackle-previous-window)))
+      window)))
+
+(defun shackle-switch-to-buffer-advice (orig-fun &rest args)
+  (if (called-interactively-p 'any)
+      (let ((override-shackle t))
+        (apply orig-fun args))
+    (apply orig-fun args)))
+
+(advice-add 'switch-to-buffer :around #'shackle-switch-to-buffer-advice)
 
 (defun shackle--frame-splittable-p (frame)
   "Return FRAME if it is splittable."
@@ -518,6 +487,8 @@ Displays BUFFER according to ALIST and PLIST."
    ((or (plist-get plist :align)
         (alist-get 'align alist))
     (shackle--display-buffer-aligned-window buffer alist plist))
+   ((plist-get plist :maximize)
+    (display-buffer-full-frame buffer alist))
    ((or (plist-get plist :same)
         ;; there is `display-buffer--same-window-action' which things
         ;; like `info' use to reuse the currently selected window, it
@@ -527,9 +498,6 @@ Displays BUFFER according to ALIST and PLIST."
              (and (assq 'inhibit-same-window alist)
                   (not (cdr (assq 'inhibit-same-window alist))))))
     (shackle--display-buffer-same buffer alist))
-   ((plist-get plist :maximize)
-    (display-buffer-full-frame buffer alist))
-   ((plist-get plist :ignore) 'fail)
    ((plist-get plist :popup-frame)
     (funcall shackle-display-buffer-popup-frame-function buffer alist plist))
    (t
@@ -551,6 +519,15 @@ window."
       (shackle--inhibit-window-quit window))
     window)))
 
+(defvar shackle-overtake-display-buffer t)
+;; intercept all display-buffer call in case display-buffer is called with action, as in display-warning
+(defun shackle--display-buffer-advice (orig-fun buffer-or-name &optional action frame)
+  ;; run shackle-match and set shackle--display-plist
+  (shackle-display-buffer-condition buffer-or-name nil)
+  (unless (plist-get shackle--display-plist :ignore)
+    (or (shackle-display-buffer-action buffer-or-name nil)
+        (funcall orig-fun buffer-or-name action frame))))
+
 ;;;###autoload
 (define-minor-mode shackle-mode
   "Toggle `shackle-mode'.
@@ -558,18 +535,19 @@ This global minor mode allows you to easily set up rules for
 popups in Emacs."
   :global t
   (if shackle-mode
-      (setq display-buffer-alist
-            (cons '(shackle-display-buffer-condition
-                    shackle-display-buffer-action)
-                  display-buffer-alist))
+      (if shackle-overtake-display-buffer
+        (advice-add 'display-buffer :around 'shackle--display-buffer-advice)
+        (setq display-buffer-alist
+              (cons '(shackle-display-buffer-condition
+                      shackle-display-buffer-action)
+                    display-buffer-alist)))
+    (advice-remove 'display-buffer 'shackle--display-buffer-advice)
     (setq display-buffer-alist
           (remove '(shackle-display-buffer-condition
                     shackle-display-buffer-action)
                   display-buffer-alist))))
 
-
 ;; debugging support
-
 (require 'trace)
 
 (defcustom shackle-trace-buffer "*shackle trace*"
