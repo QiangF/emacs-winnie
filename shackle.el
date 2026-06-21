@@ -138,7 +138,7 @@ value of 0.5 (see `shackle-default-size').
 :popup-frame and t
 
 Pop to a frame instead of window.")
-(defvar shackle-default-rule '(:align right :select t))
+(defvar shackle-default-rule '(:align right :select t :default t))
 (defvar shackle-rules shackle-default-rules)
 (setq pop-up-windows nil)
 
@@ -155,7 +155,6 @@ displaying BUFFER, or 'fail if it hasn't displayed it."
 (defun shackle-match (buffer-or-name)
   "Check whether BUFFER-OR-NAME is any rule match.
 If there is a match, it returns a property list which
-`shackle-display-buffer-condition' and
 `shackle-display-buffer-action' use."
   (let* ((buffer (get-buffer buffer-or-name)))
     (cl-loop for (condition . plist) in shackle-rules
@@ -203,21 +202,11 @@ before shackle get into action."
                (call-interactively 'move-end-of-line)))))
     window))
 
-(defvar shackle--display-plist nil)
-
 ;; shackle plist key can be put in the action argument of pop-to-buffer etc.
 ;; eg.
 ;; (action '(shackle-display-buffer-action
 ;;           (align . right)
 ;;           (inhibit-same-window . t)))
-
-(defun shackle-display-buffer-condition (buffer-or-name &optional action)
-  "Return key-value pairs when BUFFER match any shackle condition.
-Uses `shackle-match'and `shackle-rules', BUFFER and ACTION take
-the form `display-buffer-alist' specifies."
-  ;; (with-current-buffer buffer-or-name
-  ;;   (message "buffer: %s major-mode: %s" buffer-or-name major-mode))
-  (setq shackle--display-plist (shackle-match buffer-or-name)))
 
 ;; shackle action is the user-action that is handled first in display-buffer
 ;; if shackle action fails to provide a window, display-buffer moves on to next action
@@ -229,26 +218,17 @@ the form `display-buffer-alist' specifies."
 
 ;; 3 ways to override: 1. let override-shackle to t, 2. ((override-shackle . t)) alist 3. (:override-shackle) in shackle-rules
 (defvar override-shackle nil
-  "flag variable for overriding shackle in a function.
-use shackle--display-plist for overriding shackle rules.")
+  "flag variable for overriding shackle in a function. use plist for overriding shackle rules.")
+
 (defun shackle-override-advice (orig-fun &rest args)
   (let ((override-shackle t))
     (apply orig-fun args)))
 
-(with-eval-after-load 'button
-  (advice-add 'button-activate :around 'shackle-override-advice))
-
 (defun shackle-switch-to-buffer-advice (orig-fun &rest args)
   (if (called-interactively-p 'any)
-      (let ((override-shackle t))
+      (let ((switch-to-buffer-obey-display-actions nil))
         (apply orig-fun args))
     (apply orig-fun args)))
-
-(with-eval-after-load 'consult
-  (advice-add 'consult-buffer :around #'shackle-switch-to-buffer-advice))
-
-(with-eval-after-load 'exwm-workspace
-  (advice-add 'exwm-workspace-switch-to-buffer :around #'shackle-switch-to-buffer-advice))
 
 ;; other alist keys:
 ;; window-min-height window-min-width inhibit-switch-frame
@@ -270,30 +250,22 @@ use shackle--display-plist for overriding shackle rules.")
 (defun shackle-display-buffer-action (buffer alist)
   "Execute an action for BUFFER according to `shackle-rules'.
 This uses `shackle-display-buffer' internally, BUFFER and ALIST
-take the form `display-buffer-alist' specifies.
-`shackle--display-plist' was set in the match function
-`shackle-display-buffer-condition'."
-  (unless (or override-shackle
-              (plist-member shackle--display-plist :override-shackle)
-              (cl-some (lambda (key) (assoc key alist)) shackle--bypass-shackle-keys))
-    (let* ((shackle-previous-window (selected-window))
-           (window (shackle-display-buffer buffer alist shackle--display-plist)))
-      ;; (message "shackle buffer %s\n alist: %s\n plist: %s" buffer alist shackle--display-plist)
-      (if (and (or (plist-get shackle--display-plist :select)
-                   (alist-get 'select alist))
-               (window-live-p window))
-          (select-window window)
-        (when (window-live-p shackle-previous-window)
-          (select-window shackle-previous-window)))
-      window)))
-
-(defun shackle-switch-to-buffer-advice (orig-fun &rest args)
-  (if (called-interactively-p 'any)
-      (let ((override-shackle t))
-        (apply orig-fun args))
-    (apply orig-fun args)))
-
-(advice-add 'switch-to-buffer :around #'shackle-switch-to-buffer-advice)
+take the form `display-buffer-alist' specifies."
+  (let ((shackle--display-plist (shackle-match buffer)))
+    (unless (or override-shackle
+                (plist-member shackle--display-plist :override-shackle)
+                (plist-get shackle--display-plist :ignore)
+                (cl-some (lambda (key) (assoc key alist)) shackle--bypass-shackle-keys))
+      (let* ((shackle-previous-window (selected-window))
+             (window (shackle-display-buffer buffer alist shackle--display-plist)))
+        ;; (message "shackle buffer %s\n alist: %s\n plist: %s" buffer alist shackle--display-plist)
+        (if (and (or (plist-get shackle--display-plist :select)
+                     (alist-get 'select alist))
+                 (window-live-p window))
+            (select-window window)
+          (when (window-live-p shackle-previous-window)
+            (select-window shackle-previous-window)))
+        window))))
 
 (defun shackle--frame-splittable-p (frame)
   "Return FRAME if it is splittable."
@@ -301,14 +273,14 @@ take the form `display-buffer-alist' specifies.
              (not (frame-parameter frame 'unsplittable)))
     frame))
 
-(defun shackle--splittable-frame ()
+(defun shackle--splittable-frame (&optional frame)
   "Return a splittable frame to work on.
 This can be either the selected frame or the last frame that's
 not displaying a lone minibuffer."
-  (let ((selected-frame (selected-frame))
-        (last-non-minibuffer-frame (last-nonminibuffer-frame)))
-    (or (shackle--frame-splittable-p selected-frame)
-        (shackle--frame-splittable-p last-non-minibuffer-frame))))
+  (if frame
+      (shackle--frame-splittable-p frame)
+    (or (shackle--frame-splittable-p (selected-frame))
+        (shackle--frame-splittable-p (last-nonminibuffer-frame)))))
 
 (defun shackle--split-some-window (frame alist)
   "Return a window if splitting any window was successful.
@@ -412,66 +384,59 @@ Optionally use a different alignment and/or size if PLIST
 contains the :alignment key with an alignment different than the
 default one in `shackle-default-alignment' and/or PLIST contains
 the :size key with a number value."
-  (let ((frame (shackle--splittable-frame)))
+  (let ((frame (shackle--splittable-frame))
+        (prefer-same (plist-get plist :prefer-same))
+        window type)
     (when frame
-      (let* ((alignment-argument (or (plist-get plist :align)
-                                     (alist-get 'align alist)))
-             (prefer-same (plist-get plist :prefer-same))
-             (alignments '(above below left right))
-             (alignment (cond
-                         ((functionp alignment-argument)
-                          (funcall alignment-argument))
-                         ((memq alignment-argument alignments)
-                          alignment-argument)
-                         ((functionp shackle-default-alignment)
-                          (funcall shackle-default-alignment))
-                         (t shackle-default-alignment)))
-             (horizontal (when (memq alignment '(left right)) t))
-             (old-size (window-size (frame-root-window) horizontal))
-             (size (or (plist-get plist :ratio) ; yey, backwards compatibility
-                       (plist-get plist :size)
-                       (if (functionp shackle-default-size)
-                           (funcall shackle-default-size)
-                         shackle-default-size)))
-             (new-size (round (if (>= size 1)
-                                  (- old-size size)
-                                (* (- 1 size) old-size)))))
-        (if (or (< new-size (if horizontal window-min-width window-min-height))
-                (> new-size (- old-size (if horizontal window-min-width
-                                          window-min-height))))
-            (error "Invalid alignment size %s, aborting" new-size)
-          (let (window type)
-            (if (plist-get plist :clear)
-                (progn
-                  (ignore-errors (delete-other-windows))
-                  (setq window (split-window (frame-root-window frame) new-size alignment)
-                        type 'window))
-              ;; if a split already exist
-              (if (if horizontal
-                      (< (window-total-width (selected-window))
-                         (window-size (frame-root-window) t))
-                    (< (window-total-height (selected-window))
-                       (window-size (frame-root-window))))
-                  (progn
-                    (setq window (if (and prefer-same
-                                          ;; dired-find-file-other-window
-                                          (not (cdr (assoc 'inhibit-same-window alist))))
-                                     (selected-window)
-                                   (next-window nil 0))
+      (if (and prefer-same
+               ;; dired-find-file-other-window
+               (not (cdr (assoc 'inhibit-same-window alist)))
+               (equal frame (selected-frame)))
+          (setq window (selected-window)
+                type 'reuse)
+        (let* ((alignment-argument (or (plist-get plist :align)
+                                       (alist-get 'align alist)))
+               (alignments '(above below left right))
+               (alignment (cond
+                           ((functionp alignment-argument)
+                            (funcall alignment-argument))
+                           ((memq alignment-argument alignments)
+                            alignment-argument)
+                           ((functionp shackle-default-alignment)
+                            (funcall shackle-default-alignment))
+                           (t shackle-default-alignment)))
+               (horizontal (when (memq alignment '(left right)) t))
+               (frame-size (window-size (frame-root-window) horizontal))
+               ;; (window-min-size (if horizontal window-min-width window-min-height))
+               (window-max-size (round (* 0.7 frame-size)))
+               (selected-window-size (if horizontal (window-total-width (selected-window))
+                                       (window-total-height (selected-window))))
+               (size (or (plist-get plist :size)
+                         (if (functionp shackle-default-size)
+                             (funcall shackle-default-size)
+                           (round (* shackle-default-size frame-size))))))
+          (when (plist-get plist :clear)
+            (ignore-errors (delete-other-windows)))
+          ;; if a split already exist
+          (if (< selected-window-size frame-size)
+              (progn
+                (if (> selected-window-size window-max-size)
+                    (setq window (selected-window)
                           type 'reuse)
-                    (when (window-dedicated-p window)
-                      (setq window (next-window window 0))))
-                (setq window (split-window (frame-root-window frame) new-size alignment)
-                      type 'window)))
-            (prog1 (shackle--window-display-buffer buffer window type alist)
-              (when window
-                (setq shackle-last-window window
-                      shackle-last-buffer buffer)
-                (when (plist-get plist :kill-window)
-                  (with-selected-window window
-                    (add-hook 'kill-buffer-hook 'shackle--delete-window 0 t))))
-              (unless (cdr (assq 'inhibit-switch-frame alist))
-                (window--maybe-raise-frame frame)))))))))
+                  (setq window (next-window window 0)))
+                (when (window-dedicated-p window)
+                  (setq window (next-window window 0))))
+            (setq window (split-window (frame-root-window frame) size alignment)
+                  type 'window))))
+      (when window
+        (prog1 (shackle--window-display-buffer buffer window type alist)
+          (setq shackle-last-window window
+                shackle-last-buffer buffer)
+          (when (plist-get plist :kill-window)
+            (with-selected-window window
+              (add-hook 'kill-buffer-hook 'shackle--delete-window 0 t)))
+          (unless (cdr (assq 'inhibit-switch-frame alist))
+            (window--maybe-raise-frame frame)))))))
 
 (defun shackle--display-buffer (buffer alist plist)
   "Internal function for `shackle-display-buffer'.
@@ -500,8 +465,7 @@ Displays BUFFER according to ALIST and PLIST."
     (shackle--display-buffer-same buffer alist))
    ((plist-get plist :popup-frame)
     (funcall shackle-display-buffer-popup-frame-function buffer alist plist))
-   (t
-    (shackle--display-buffer-popup-window buffer alist plist))))
+   (t (shackle--display-buffer-popup-window buffer alist plist))))
 
 (defun shackle-display-buffer (buffer alist plist)
   "Display BUFFER according to ALIST and PLIST.
@@ -519,15 +483,15 @@ window."
       (shackle--inhibit-window-quit window))
     window)))
 
-(defvar shackle-overtake-display-buffer t)
 ;; intercept all display-buffer call in case display-buffer is called with action, as in display-warning
 (defun shackle--display-buffer-advice (orig-fun buffer-or-name &optional action frame)
-  ;; run shackle-match and set shackle--display-plist
-  (shackle-display-buffer-condition buffer-or-name nil)
-  (unless (plist-get shackle--display-plist :ignore)
-    (or (shackle-display-buffer-action buffer-or-name nil)
-        (funcall orig-fun buffer-or-name action frame))))
+  (let ((alist (cdr action)))
+        (or (shackle-display-buffer-action buffer-or-name alist)
+            (funcall orig-fun buffer-or-name action frame))))
 
+;; (setq display-buffer-alist
+;;       (cons '("*" shackle-display-buffer-action)
+;;             display-buffer-alist))
 ;;;###autoload
 (define-minor-mode shackle-mode
   "Toggle `shackle-mode'.
@@ -535,17 +499,23 @@ This global minor mode allows you to easily set up rules for
 popups in Emacs."
   :global t
   (if shackle-mode
-      (if shackle-overtake-display-buffer
-        (advice-add 'display-buffer :around 'shackle--display-buffer-advice)
-        (setq display-buffer-alist
-              (cons '(shackle-display-buffer-condition
-                      shackle-display-buffer-action)
-                    display-buffer-alist)))
-    (advice-remove 'display-buffer 'shackle--display-buffer-advice)
-    (setq display-buffer-alist
-          (remove '(shackle-display-buffer-condition
-                    shackle-display-buffer-action)
-                  display-buffer-alist))))
+      (progn
+        (with-eval-after-load 'consult
+          (advice-add 'consult-buffer :around #'shackle-switch-to-buffer-advice))
+        (with-eval-after-load 'exwm-workspace
+          (advice-add 'exwm-workspace-switch-to-buffer :around #'shackle-switch-to-buffer-advice))
+        (advice-add 'switch-to-buffer :around #'shackle-switch-to-buffer-advice)
+        (with-eval-after-load 'button
+          (advice-add 'button-activate :around 'shackle-override-advice))
+        (advice-add 'display-buffer :around 'shackle--display-buffer-advice))
+    (with-eval-after-load 'consult
+      (advice-remove 'consult-buffer #'shackle-switch-to-buffer-advice))
+    (with-eval-after-load 'exwm-workspace
+      (advice-remove 'exwm-workspace-switch-to-buffer #'shackle-switch-to-buffer-advice))
+    (advice-remove 'switch-to-buffer #'shackle-switch-to-buffer-advice)
+    (with-eval-after-load 'button
+      (advice-remove 'button-activate 'shackle-override-advice))
+    (advice-remove 'display-buffer 'shackle--display-buffer-advice)))
 
 ;; debugging support
 (require 'trace)
