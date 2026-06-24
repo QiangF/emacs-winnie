@@ -53,6 +53,7 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
     (winnie-list-to-tree (nth winnie-position confs)
                            (selected-window)
                            scratch-buf)
+    ;; (message "Winnie %s / %s %s" winnie-position winnie-length (cdr (assoc (selected-frame) winnie-alist)))
     (message "Winnie %s / %s" winnie-position winnie-length)))
 
 (defun winnie-tree-to-list (tree selected)
@@ -174,15 +175,16 @@ Comparison is done via `equal'.  The index is 0-based."
   (region-active-p))
 
 ;; winnie saves at traverse-beginning and window-state-change-hook that triggers not by traversing
-(defun winnie-save-current (&optional frame)
+(defun winnie-save-conf (&optional conf)
   (interactive)
   (unless (active-minibuffer-window)
-    (let* ((frame (or frame (selected-frame)))
+    (let* ((frame (selected-frame))
            (win (selected-window))
-           (conf (winnie-dump-window-tree))
+           (conf (or conf (winnie-dump-window-tree)))
            (confs (cdr (assoc frame winnie-alist)))
            (ind (winnie-find-index-for-conf confs conf)))
-      ;; (notify "winnie save" (format "ind %s" ind))
+      ;; (notify "winnie save" (format "ind %s conf %s" ind conf))
+      ;; (message (format "ind %s" ind))
       (if ind
           (setq confs (nth-delq ind confs))
         (when (> (length confs) winnie-max-conf-num)
@@ -191,14 +193,19 @@ Comparison is done via `equal'.  The index is 0-based."
       (push conf confs)
       (alist-set 'winnie-alist frame confs))))
 
+(defvar winnie-traverse-destination-conf nil)
 ;; when put in window-state-change-hook, at the time this function is run,
 ;; this-command has become last-command, this-command is nil
 (defun winnie-save-for-window-state-change (&optional frame-or-window)
   (interactive)
-  (unless (or (equal 'self-insert-command real-this-command)
-              (winnie-command-p last-command))
-    ;; (message "Winnie real cmd %s last-cmd %s" real-this-command last-command)
-    (winnie-save-current)))
+  (if (winnie-command-p real-last-command)
+      (setq winnie-traverse-destination-conf (winnie-dump-window-tree))
+    ;; (notify "Winnie" (format "this-cmd %s last-cmd %s" real-this-command real-last-command))
+    (when winnie-traverse-destination-conf
+      (winnie-save-conf winnie-traverse-destination-conf)
+      (setq winnie-traverse-destination-conf nil))
+    (unless (equal 'self-insert-command real-this-command)
+      (winnie-save-conf))))
 
 (defun alist-set (alist-symbol key value)
   "Set KEY to VALUE in alist ALIST-SYMBOL."
@@ -229,17 +236,17 @@ Comparison is done via `equal'.  The index is 0-based."
   (interactive)
   (if (winnie-command-p last-command)
       (winnie-set-relative 1)
-    (winnie-save-current)
     (setq winnie-traverse-position 0)
-    (winnie-set-relative 1)))
+    (winnie-set-relative 1))
+  (setq this-command 'winnie-previous))
 
 (defun winnie-next ()
   (interactive)
   (if (winnie-command-p last-command)
       (winnie-set-relative -1)
-    (winnie-save-current)
     (setq winnie-traverse-position 0)
-    (winnie-set-relative -1)))
+    (winnie-set-relative -1))
+  (setq this-command 'winnie-next))
 
 (defvar winnie-mode-map
   (let ((map (make-sparse-keymap)))
