@@ -22,9 +22,10 @@
            (progn (set-window-buffer win buf)
                   (and dedicated (set-window-dedicated-p win t))))
           (buf-file-name
-           (set-window-buffer win (if (directory-name-p buf-file-name)
-                                      (dired-internal-noselect buf-file-name)
-                                    (find-file-noselect buf-file-name))))
+           (if (directory-name-p buf-file-name)
+               (set-window-buffer win (dired-internal-noselect buf-file-name))
+             (when (file-exists-p buf-file-name)
+                 (set-window-buffer win (find-file-noselect buf-file-name)))))
           (t (and fallback-buf (set-window-buffer win fallback-buf))))
     (when selected (select-window win 'mark-for-redisplay))))
 
@@ -43,18 +44,24 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
       (winnie-list-to-tree (if (> (length others) 2) others (car others))
                              newwin fallback-buf))))
 
+;; window-state-change-hook is a hook that is run from redisplay.
+;; Redisplay runs asynchronously to your code. It looks up the global value of window-state-change-functions.
+;; let-bound window-state-change-hook locally won't affect the global value.
+;; it only supresses winnie save in window state change functions.
 (defun winnie-set (confs winnie-position)
-  (let* ((winnie-length (length confs))
-         scratch-buf)
-    (when (window-dedicated-p)
-      (setq scratch-buf (get-buffer-create "*scratch*"))
-      (pop-to-buffer scratch-buf))
-    (delete-other-windows)
-    (winnie-list-to-tree (nth winnie-position confs)
+  (cl-letf ((window-state-change-hook (remove 'winnie-save-for-window-state-change window-state-change-hook)))
+    (let* ((winnie-length (length confs))
+           scratch-buf)
+      (when (window-dedicated-p)
+        (setq scratch-buf (get-buffer-create "*scratch*"))
+        (pop-to-buffer scratch-buf))
+      (delete-other-windows)
+      (winnie-list-to-tree (nth winnie-position confs)
                            (selected-window)
                            scratch-buf)
-    ;; (message "Winnie %s / %s %s" winnie-position winnie-length (cdr (assoc (selected-frame) winnie-alist)))
-    (message "Winnie %s / %s" winnie-position winnie-length)))
+      (setq winnie-traverse-destination-conf (nth winnie-position confs))
+      ;; (message "Winnie %s / %s %s" winnie-position winnie-length (cdr (assoc (selected-frame) winnie-alist)))
+      (message "Winnie %s / %s" winnie-position winnie-length))))
 
 (defun winnie-tree-to-list (tree selected)
   "TREE is the output of `window-tree' except `minibuffer'."
@@ -177,14 +184,15 @@ Comparison is done via `equal'.  The index is 0-based."
 ;; winnie saves at traverse-beginning and window-state-change-hook that triggers not by traversing
 (defun winnie-save-conf (&optional conf)
   (interactive)
-  (unless (active-minibuffer-window)
+  (when (or (not (active-minibuffer-window))
+            ;; conf spicified only on saving winnie-traverse-destination-conf, it might be triggered by a minibuffer popup
+            conf)
     (let* ((frame (selected-frame))
            (win (selected-window))
            (conf (or conf (winnie-dump-window-tree)))
            (confs (cdr (assoc frame winnie-alist)))
            (ind (winnie-find-index-for-conf confs conf)))
-      ;; (notify "winnie save" (format "ind %s conf %s" ind conf))
-      ;; (message (format "ind %s" ind))
+      ;; (notify "winnie save" (format "ind %s conf %s winnie-this-command %s" ind conf (winnie-command-p real-last-command)))
       (if ind
           (setq confs (nth-delq ind confs))
         (when (> (length confs) winnie-max-conf-num)
@@ -194,17 +202,19 @@ Comparison is done via `equal'.  The index is 0-based."
       (alist-set 'winnie-alist frame confs))))
 
 (defvar winnie-traverse-destination-conf nil)
+
 ;; when put in window-state-change-hook, at the time this function is run,
-;; this-command has become last-command, this-command is nil
+;; this-command has become real-last-command, this-command is nil
 (defun winnie-save-for-window-state-change (&optional frame-or-window)
   (interactive)
-  (if (winnie-command-p real-last-command)
-      (setq winnie-traverse-destination-conf (winnie-dump-window-tree))
-    ;; (notify "Winnie" (format "this-cmd %s last-cmd %s" real-this-command real-last-command))
-    (when winnie-traverse-destination-conf
-      (winnie-save-conf winnie-traverse-destination-conf)
-      (setq winnie-traverse-destination-conf nil))
-    (unless (equal 'self-insert-command real-this-command)
+  (let ((winnie-this-command (winnie-command-p real-last-command)))
+    (unless winnie-this-command
+      (when winnie-traverse-destination-conf
+        ;; (notify "Winnie WindowState chang"
+        ;;               (format "this-cmd %s last-cmd %s dest conf %s"
+        ;;                       real-this-command real-last-command winnie-traverse-destination-conf))
+        (winnie-save-conf winnie-traverse-destination-conf)
+        (setq winnie-traverse-destination-conf nil))
       (winnie-save-conf))))
 
 (defun alist-set (alist-symbol key value)
@@ -214,19 +224,19 @@ Comparison is done via `equal'.  The index is 0-based."
              (assoc-delete-all key (eval alist-symbol)))))
 
 (defun winnie-set-relative (step)
-  ;; reset on step equal 0
-  ;; window-state-change-hook is a hook that is run from redisplay.
-  ;; Redisplay runs asynchronously to your code. It looks up the global value of window-state-change-functions.
-  ;; To let-bound window-state-change-hook locally won't affect the global value.
-  (cl-letf (;; supress winnie save in window state change functions
-            (window-state-change-hook (remove 'winnie-save-for-window-state-change window-state-change-hook)))
-    (let* ((confs (cdr (assoc (selected-frame) winnie-alist)))
-           (winnie-length (length confs)))
-      (if confs
-          (progn (setq winnie-traverse-position
-                       (if (zerop step) 0 (mod (cl-incf winnie-traverse-position step) winnie-length)))
-                 (winnie-set confs winnie-traverse-position))
-        (message "Frame has no saved winnie confs")))))
+  (let* ((confs (cdr (assoc (selected-frame) winnie-alist)))
+         (winnie-length (length confs)))
+    (when confs
+      (unless (winnie-command-p real-last-command)
+        ;; reset before increment, position 0 is always current
+        (setq winnie-traverse-position 0)
+        ;; when winnie-traverse-destination-conf not processed in window-stat-change-hook
+        (when winnie-traverse-destination-conf
+          ;; side effect: change confs order, put winnie-traverse-destination-conf at 0
+          (winnie-save-conf winnie-traverse-destination-conf)))
+      (setq winnie-traverse-position
+            (mod (cl-incf winnie-traverse-position step) winnie-length))
+      (winnie-set confs winnie-traverse-position))))
 
 (defun winnie-command-p (cmd)
   (or (equal cmd 'winnie-previous)
@@ -234,19 +244,13 @@ Comparison is done via `equal'.  The index is 0-based."
 
 (defun winnie-previous ()
   (interactive)
-  (if (winnie-command-p last-command)
-      (winnie-set-relative 1)
-    (setq winnie-traverse-position 0)
-    (winnie-set-relative 1))
-  (setq this-command 'winnie-previous))
+  (setq this-command 'winnie-previous)
+  (winnie-set-relative 1))
 
 (defun winnie-next ()
   (interactive)
-  (if (winnie-command-p last-command)
-      (winnie-set-relative -1)
-    (setq winnie-traverse-position 0)
-    (winnie-set-relative -1))
-  (setq this-command 'winnie-next))
+  (setq this-command 'winnie-next)
+  (winnie-set-relative -1))
 
 (defvar winnie-mode-map
   (let ((map (make-sparse-keymap)))
@@ -257,8 +261,9 @@ Comparison is done via `equal'.  The index is 0-based."
 
 (defun winnie-keyboard-quit (&rest arg)
   "Abort window conf jumping, and go back to conf before jump."
-  (when (winnie-command-p last-command)
-    (winnie-set-relative 0)))
+  (when (winnie-command-p real-last-command)
+    (winnie-set confs 0)
+    (setq (setq winnie-traverse-destination-conf nil))))
 
 ;;;###autoload
 (define-minor-mode winnie-mode
