@@ -5,8 +5,8 @@ Put the file on your load-path. Example config:
 ```
 (use-package winnie
   :ensure nil
-  :bind* (("C-9" . winnie-next)
-          ("C-8" . winnie-previous))
+  :bind* (("C-9" . winnie-redo)
+          ("C-8" . winnie-undo))
   :hook after-init)
 ```
 

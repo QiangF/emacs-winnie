@@ -3,21 +3,19 @@
 (eval-when-compile (require 'cl-lib))
 (defvar winnie-max-size-diff 4)
 (defvar winnie-alist nil)
-(setq winnie-max-conf-num 20)
+(defvar winnie-max-conf-num 20)
 (defvar winnie-traverse-position 0)
-(setq winnie-boring-buffers '("*Completions*" "*lispy-message*" "*Ilist*"))
-(setq winnie-boring-buffers-regexp "^ \\*")
+(defvar winnie-boring-buffers '("*Completions*" "*lispy-message*" "*Ilist*"))
+(defvar winnie-boring-buffers-regexp "^ \\*")
 
-(defun winnie-set-winbuf (win win-info fallback-buf)
-  (let* ((buf-name (nth 0 win-info))
+(defun winnie-restore-buffer (win conf fallback-buf)
+  (let* ((buf-name (nth 0 conf))
          (buf (if (numberp buf-name)
                   (alist-get buf-name exwm--id-buffer-alist)
-                  (get-buffer buf-name)))
-         (buf-file-name (nth 1 win-info))
-         (buf-point (nth 2 win-info))
-         (window-start (nth 3 win-info))
-         (selected (nth 4 win-info))
-         (dedicated (nth 5 win-info)))
+                (get-buffer buf-name)))
+         (buf-file-name (nth 1 conf))
+         (selected (nth 2 conf))
+         (dedicated (nth 3 conf)))
     (cond (buf
            (progn (set-window-buffer win buf)
                   (and dedicated (set-window-dedicated-p win t))))
@@ -25,15 +23,41 @@
            (if (directory-name-p buf-file-name)
                (set-window-buffer win (dired-internal-noselect buf-file-name))
              (when (file-exists-p buf-file-name)
-                 (set-window-buffer win (find-file-noselect buf-file-name)))))
+               (set-window-buffer win (find-file-noselect buf-file-name)))))
           (t (and fallback-buf (set-window-buffer win fallback-buf))))
     (when selected (select-window win 'mark-for-redisplay))))
+
+(defvar winnie-dead-buf-found nil)
+(defun winnie-find-dead-buffer (conf)
+  (unless winnie-dead-buf-found
+    (if (winnie-buffer-p (car conf))
+        (let* ((buf-name (nth 0 conf))
+               (buf (if (numberp buf-name)
+                        (alist-get buf-name exwm--id-buffer-alist)
+                      (get-buffer buf-name)))
+               (buf-file-name (nth 1 conf)))
+          (unless (or buf-file-name buf)
+            (setq winnie-dead-buf-found t)))
+      (let ((others (nthcdr 3 conf)))
+        (winnie-find-dead-buffer (cl-third conf))
+        (winnie-find-dead-buffer (if (> (length others) 2) others (car others)))))))
+
+(defun winnie-clean-confs ()
+  (let* ((frame (selected-frame))
+         (confs (cdr (assoc frame winnie-alist)))
+         confs-new)
+    (delete-dups confs)
+    (dolist (conf (reverse confs))
+      (setq winnie-dead-buf-found nil)
+      (unless (winnie-find-dead-buffer conf)
+        (push conf confs-new)))
+    (alist-set 'winnie-alist frame confs-new)))
 
 (defun winnie-list-to-tree (conf win fallback-buf)
   "Resume the window from saved list CONF, WIN is `selected-window', on which performs the
 split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
-  (if (winnie-buf-namep (car conf))
-      (winnie-set-winbuf win conf fallback-buf)
+  (if (winnie-buffer-p (car conf))
+      (winnie-restore-buffer win conf fallback-buf)
     (let* ((horizontal (eq (car conf) 'h))
            (newwin (split-window win
                                  ;; (if horizontal (cadr conf) (cadr conf))
@@ -42,29 +66,34 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
            (others (nthcdr 3 conf)))
       (winnie-list-to-tree (cl-third conf) win fallback-buf)
       (winnie-list-to-tree (if (> (length others) 2) others (car others))
-                             newwin fallback-buf))))
+                           newwin fallback-buf))))
 
-;; window-state-change-hook is a hook that is run from redisplay.
+;; window-state-change-functions is a hook that is run from redisplay.
 ;; Redisplay runs asynchronously to your code. It looks up the global value of window-state-change-functions.
-;; let-bound window-state-change-hook locally won't affect the global value.
+;; let-bound window-state-change-functions locally won't affect the global value.
 ;; it only supresses winnie save in window state change functions.
-(defun winnie-set (confs winnie-position)
-  (cl-letf ((window-state-change-hook (remove 'winnie-save-for-window-state-change window-state-change-hook)))
+(defun winnie-restore (confs winnie-position)
+  (cl-letf ((window-state-change-functions (remove 'winnie-window-state-change window-state-change-functions)))
     (let* ((winnie-length (length confs))
-           scratch-buf)
+           fallback-buf)
       (when (window-dedicated-p)
-        (setq scratch-buf (get-buffer-create "*scratch*"))
-        (pop-to-buffer scratch-buf))
+        (setq fallback-buf (get-buffer-create "*scratch*"))
+        (pop-to-buffer fallback-buf))
       (delete-other-windows)
       (winnie-list-to-tree (nth winnie-position confs)
                            (selected-window)
-                           scratch-buf)
-      (setq winnie-traverse-destination-conf (nth winnie-position confs))
-      ;; (message "Winnie %s / %s %s" winnie-position winnie-length (cdr (assoc (selected-frame) winnie-alist)))
+                           fallback-buf)
+      (if (equal winnie-position 0)
+          (setq winnie-traverse-destination-conf nil)
+        (setq winnie-traverse-destination-conf (nth winnie-position confs)))
       (message "Winnie %s / %s" winnie-position winnie-length))))
 
 (defun winnie-tree-to-list (tree selected)
-  "TREE is the output of `window-tree' except `minibuffer'."
+  "TREE is the output of `window-tree' except `minibuffer'.
+Return a list containing the current window tree info. The format looks like:
+('h(orizontal)/'v(ertical) size-of-left-window xxx xxx ...)
+where the first element is the split direction, second is the size used as the
+argument of `split-winow'. The rest is a list of win-info, or another list with the given format."
   (if (windowp tree)
       (with-selected-window tree
         (let ((buf-name (if (eq major-mode 'exwm-mode)
@@ -84,8 +113,6 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
             (list buf-name
                   (and file-name
                        (abbreviate-file-name file-name))
-                  (point)
-                  (window-start)
                   (equal tree selected)
                   dedicated))))
     (let* ((vertical-split (car tree))
@@ -104,14 +131,6 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
                 branch2-list)
         (or branch1-list branch2-list)))))
 
-(defun winnie-dump-window-tree ()
-  "Return a list containing the current window tree info. The format looks like:
-     ('h(orizontal)/'v(ertical) size-of-left-window xxx xxx ...)
-where the first element is the split direction, second is the size used as the
-argument of `split-winow'. The rest is a list of win-info, or another list with the given format.
-win-info has the format of (window-buffer-name file-name point window-start)."
-  (winnie-tree-to-list (car (window-tree)) (selected-window)))
-
 (defun winnie-get-window-width (win)
   "Obtain the width of window if the argument is `windowp', or calculate the width
 from the second element of output from `window-tree'."
@@ -128,14 +147,14 @@ from the second element of output from `window-tree'."
     (let ((edge (cadr win)))
       (- (fourth edge) (second edge)))))
 
-(defun winnie-buf-namep (buf-name)
+(defun winnie-buffer-p (buf-name)
   (or (stringp buf-name)
       ;; exwm--id
       (numberp buf-name)))
 
 (defsubst winnie-equal (conf-a conf-b)
-  (if (and (winnie-buf-namep (car conf-a))
-           (winnie-buf-namep (car conf-b)))
+  (if (and (winnie-buffer-p (car conf-a))
+           (winnie-buffer-p (car conf-b)))
       ;; one window conf
       (let ((buf-name-a (nth 0 conf-a))
             (buf-file-a (nth 1 conf-a))
@@ -169,10 +188,11 @@ from the second element of output from `window-tree'."
 (defun winnie-find-index-for-conf (confs conf)
   "Return index of ITEM if on confs, else nil.
 Comparison is done via `equal'.  The index is 0-based."
-  (catch 'found
-    (dotimes (ind (length confs))
-      (when (winnie-equal conf (nth ind confs))
-        (throw 'found ind)))))
+  (when confs
+    (catch 'found
+      (dotimes (ind (length confs))
+        (when (winnie-equal conf (nth ind confs))
+          (throw 'found ind))))))
 
 (defun nth-delq (n list-in)
   (delq (setcar (nthcdr n list-in) (gensym)) list-in))
@@ -181,41 +201,42 @@ Comparison is done via `equal'.  The index is 0-based."
   (declare (gv-setter (lambda (store) `(if ,store (activate-mark) (deactivate-mark)))))
   (region-active-p))
 
-;; winnie saves at traverse-beginning and window-state-change-hook that triggers not by traversing
-(defun winnie-save-conf (&optional conf)
+;; winnie saves at traverse-beginning and window-state-change-functions that triggers not by traversing
+(defun winnie-save (&optional conf)
   (interactive)
   (when (or (not (active-minibuffer-window))
             ;; conf spicified only on saving winnie-traverse-destination-conf, it might be triggered by a minibuffer popup
             conf)
     (let* ((frame (selected-frame))
            (win (selected-window))
-           (conf (or conf (winnie-dump-window-tree)))
+           (conf (or conf (winnie-tree-to-list (car (window-tree)) (selected-window))))
            (confs (cdr (assoc frame winnie-alist)))
            (ind (winnie-find-index-for-conf confs conf)))
-      ;; (notify "winnie save" (format "ind %s conf %s winnie-this-command %s" ind conf (winnie-command-p real-last-command)))
       (if ind
           (setq confs (nth-delq ind confs))
         (when (> (length confs) winnie-max-conf-num)
           (setq confs (butlast confs))))
-      ;; save current conf at slot 0 and reset winnie-traverse-position
+      ;; save current conf at slot 0
       (push conf confs)
       (alist-set 'winnie-alist frame confs))))
 
 (defvar winnie-traverse-destination-conf nil)
 
-;; when put in window-state-change-hook, at the time this function is run,
-;; this-command has become real-last-command, this-command is nil
-(defun winnie-save-for-window-state-change (&optional frame-or-window)
+;; in window-state-change-functions this-command has become real-last-command, this-command is nil
+(defun winnie-window-state-change (&optional frame-or-window)
   (interactive)
-  (let ((winnie-this-command (winnie-command-p real-last-command)))
-    (unless winnie-this-command
-      (when winnie-traverse-destination-conf
-        ;; (notify "Winnie WindowState chang"
-        ;;               (format "this-cmd %s last-cmd %s dest conf %s"
-        ;;                       real-this-command real-last-command winnie-traverse-destination-conf))
-        (winnie-save-conf winnie-traverse-destination-conf)
-        (setq winnie-traverse-destination-conf nil))
-      (winnie-save-conf))))
+  (unless (winnie-command-p winnie-real-this-command)
+    (when winnie-traverse-destination-conf
+      (winnie-save winnie-traverse-destination-conf)
+      (setq winnie-traverse-destination-conf nil))
+    (winnie-save))
+  ;; (notify (format "win-change last-cmd %s this-cmd %s" winnie-real-last-command winnie-real-this-command)
+  ;;         (let (result)
+  ;;           (dolist (conf (cdr (assoc (selected-frame) winnie-alist)))
+  ;;             (setq result (concat result "\n" (format "%s" conf))))
+  ;;           result)
+  ;;         :timeout 25000)
+  )
 
 (defun alist-set (alist-symbol key value)
   "Set KEY to VALUE in alist ALIST-SYMBOL."
@@ -223,61 +244,68 @@ Comparison is done via `equal'.  The index is 0-based."
        (cons (cons key value)
              (assoc-delete-all key (eval alist-symbol)))))
 
-(defun winnie-set-relative (step)
+(defun winnie-restore-relative (step)
   (let* ((confs (cdr (assoc (selected-frame) winnie-alist)))
          (winnie-length (length confs)))
     (when confs
-      (unless (winnie-command-p real-last-command)
-        ;; reset before increment, position 0 is always current
-        (setq winnie-traverse-position 0)
-        ;; when winnie-traverse-destination-conf not processed in window-stat-change-hook
-        (when winnie-traverse-destination-conf
-          ;; side effect: change confs order, put winnie-traverse-destination-conf at 0
-          (winnie-save-conf winnie-traverse-destination-conf)))
       (setq winnie-traverse-position
             (mod (cl-incf winnie-traverse-position step) winnie-length))
-      (winnie-set confs winnie-traverse-position))))
+      (winnie-restore confs winnie-traverse-position))))
 
 (defun winnie-command-p (cmd)
-  (or (equal cmd 'winnie-previous)
-      (equal cmd 'winnie-next)))
+  (or (equal cmd 'winnie-undo)
+      (equal cmd 'winnie-redo)))
 
-(defun winnie-previous ()
+(defun winnie-undo ()
   (interactive)
-  (setq this-command 'winnie-previous)
-  (winnie-set-relative 1))
+  (when winnie-alist
+    (winnie-clean-confs)
+    (unless (winnie-command-p winnie-real-last-command)
+      (when winnie-traverse-destination-conf
+        ;; update so the current is always 0
+        (winnie-save winnie-traverse-destination-conf)
+        (setq winnie-traverse-destination-conf nil))
+      (setq winnie-traverse-position 0))
+    (winnie-restore-relative 1)))
 
-(defun winnie-next ()
+(defun winnie-redo ()
   (interactive)
-  (setq this-command 'winnie-next)
-  (winnie-set-relative -1))
+  (if (winnie-command-p winnie-real-last-command)
+      (winnie-restore-relative -1)
+    (message "Winnie undo not started.")))
 
 (defvar winnie-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [(control c) left] #'winnie-previous)
-    (define-key map [(control c) right] #'winnie-next)
+    (define-key map [(control c) left] #'winnie-undo)
+    (define-key map [(control c) right] #'winnie-redo)
     map)
   "Keymap for winnie mode.")
 
 (defun winnie-keyboard-quit (&rest arg)
   "Abort window conf jumping, and go back to conf before jump."
   (when (winnie-command-p real-last-command)
-    (winnie-set confs 0)
-    (setq (setq winnie-traverse-destination-conf nil))))
+    (winnie-restore (cdr (assoc (selected-frame) winnie-alist)) 0)))
+
+(defun winnie-record-command ()
+  (setq winnie-real-last-command real-last-command)
+  (setq winnie-real-this-command real-this-command))
 
 ;;;###autoload
 (define-minor-mode winnie-mode
   "Toggle winnie mode on or off.
 
-winnie mode is a global minor mode that records the changes in
-the window configuration (i.e. how the frames are partitioned
-into windows)."
+winnie mode is a global minor mode that records the changes in the window configuration,
+i.e. how the frames are partitioned into windows)."
   :global t
   (if winnie-mode
       (progn
-        (add-hook 'window-state-change-hook 'winnie-save-for-window-state-change)
+        (winnie-save)
+        ;; hook can not be added to window-state-change-hook via winnie-mode enabled in after-init-hook
+        (add-hook 'window-state-change-functions 'winnie-window-state-change)
+        (add-hook 'pre-command-hook 'winnie-record-command)
         (advice-add #'keyboard-quit :before #'winnie-keyboard-quit))
-    (remove-hook 'window-state-change-hook 'winnie-save-for-window-state-change)
+    (remove-hook 'window-state-change-functions 'winnie-window-state-change)
+    (remove-hook 'pre-command-hook 'winnie-record-command)
     (advice-remove #'keyboard-quit #'winnie-keyboard-quit)))
 
 (provide 'winnie)
