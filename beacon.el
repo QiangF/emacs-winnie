@@ -4,6 +4,7 @@
 ;; to previous and next beacon blinking positions, use keyboard-quit to abort the process
 ;; and go back to where the jump starts
 ;; https://github.com/Overdr0ne/gumshoe
+;; https://git.andros.dev/andros/comet-trail.el
 
 (require 'cl-lib)
 (require 'seq)
@@ -236,15 +237,18 @@ Unlike `beacon--blink-automated', the beacon will blink
 unconditionally (even if `beacon-mode' is disabled), and this can
 be invoked as a user command or called from Lisp code."
   (interactive)
-  (run-hooks 'beacon-before-blink-hook)
-  (when (timerp beacon-timer)
-    (cancel-timer beacon-timer))
-  (beacon--vanish)
-  (beacon--shine)
-  (setq beacon-timer
-        (run-at-time beacon-blink-delay
-                     (/ beacon-blink-duration 1.0 beacon-size)
-                     #'beacon--dec)))
+  ;; put in a timer to avoid being dropped out in pre-command-hook and post-command-hook
+  (run-at-time 0 nil
+               (lambda ()
+                 (run-hooks 'beacon-before-blink-hook)
+                 (when (timerp beacon-timer)
+                   (cancel-timer beacon-timer))
+                 (beacon--vanish)
+                 (beacon--shine)
+                 (setq beacon-timer
+                       (run-at-time beacon-blink-delay
+                                    (/ beacon-blink-duration 1.0 beacon-size)
+                                    #'beacon--dec)))))
 
 (defun beacon--blink-automated ()
   "If appropriate, blink the beacon at the location of the cursor.
@@ -302,7 +306,7 @@ The same is true for DELTA-X and horizonta movement."
 
 (defvar beacon-last-mark-before-jump nil)
 
-(defcustom beacon-push-mark-threshold 3
+(defcustom beacon-push-mark-threshold 1
   "Should the mark be pushed before long movements?
 If nil, `beacon' will not push the mark.
 Otherwise this should be a number, and `beacon' will push the
@@ -377,6 +381,19 @@ for efficiency and clarity, though the function handles unsorted indices."
       (setcdr last (cddr last))
       list)))
 
+(defun recenter-dwim (&optional pt)
+  "Recenter point if it is less than 5 lines from the top or bottom of the window.
+Does nothing if point is comfortably within the window."
+  (interactive)
+  (let* ((pt (or pt (point)))
+         (lines-from-top (count-screen-lines (window-start) pt))
+         (lines-from-bottom (- (window-body-height) lines-from-top)))
+    (when (or (and (< lines-from-top 5)
+                   (> lines-from-bottom 5))
+              (and (> lines-from-top 5)
+                   (< lines-from-bottom 5)))
+      (recenter))))
+
 (defun beacon-increase-mark-position (&optional step)
   "Used to navigate to the previous location on beacon-mark-list.
 1. Increments beacon-mark-traversal-position
@@ -393,7 +410,9 @@ Borrows code from `pop-global-mark'."
         (cl-incf beacon-mark-traversal-position step)
         (setq beacon-mark-traversal-position (mod beacon-mark-traversal-position (length beacon-markers)))
         (goto-char (elt beacon-markers beacon-mark-traversal-position)))
-      (message "beacon-mark-position: %s" beacon-mark-traversal-position))))
+      (message "beacon-mark-position: %s" beacon-mark-traversal-position)
+      (redisplay)
+      (recenter-dwim (elt beacon-markers beacon-mark-traversal-position)))))
 
 (defun beacon--find-index-for-mark (marker1 marker-list)
   (catch 'found
@@ -482,17 +501,19 @@ If the markers are in different buffers, returns nil."
         (beacon--push-mark))
        ;; Blink for movement, same window, same buffer
        ((beacon--movement-> beacon-push-mark-threshold)
-        (if (and beacon-scrolled-window
-                 (equal beacon-scrolled-window (selected-window)))
-            (progn
-              (beacon--debug "beacon: window scroll")
-              ;; Blink for scrolling
-              (beacon--blink-automated)
-              (unless (beacon--scroll-command-p last-command)
-                (beacon--push-mark)))
-          (beacon--debug "beacon: row movement")
-          (beacon--blink-automated)
-          (beacon--push-mark)))))
+        ;; (if (and beacon-scrolled-window
+        ;;          (equal beacon-scrolled-window (selected-window)))
+        ;;     (progn
+        ;;       (beacon--debug "beacon: window scroll")
+        ;;       ;; Blink for scrolling
+        ;;       (beacon--blink-automated)
+        ;;       (unless (beacon--scroll-command-p last-command)
+        ;;         (beacon--push-mark)))
+        ;;   (beacon--debug "beacon: row movement")
+        ;;   (beacon--blink-automated)
+        ;;   (beacon--push-mark))
+        (beacon--blink-automated)
+        (beacon--push-mark))))
     (setq beacon-scrolled-window nil)))
 
 (defun beacon--window-scroll-function (window start-pos)
@@ -523,18 +544,17 @@ unreliable, so just blink immediately."
         (beacon--pre-command)
         ;; push-mark might be called several times in a command
         (advice-add 'push-mark :after #'beacon--push-mark)
+        ;; (add-hook 'before-change-functions #'beacon--vanish)
         (add-function :after after-focus-change-function #'beacon--blink-automated)
-        (add-hook 'window-scroll-functions #'beacon--window-scroll-function)
+        ;; (add-hook 'window-scroll-functions #'beacon--window-scroll-function)
         (add-hook 'pre-command-hook #'beacon--pre-command)
-        (add-hook 'post-command-hook #'beacon--post-command)
-        (add-hook 'before-change-functions #'beacon--vanish))
-
+        (add-hook 'post-command-hook #'beacon--post-command))
     (advice-remove 'push-mark #'beacon--push-mark)
+    ;; (remove-hook 'before-change-functions #'beacon--vanish)
     (remove-function after-focus-change-function #'beacon--blink-automated)
-    (remove-hook 'window-scroll-functions #'beacon--window-scroll-function)
+    ;; (remove-hook 'window-scroll-functions #'beacon--window-scroll-function)
     (remove-hook 'post-command-hook #'beacon--post-command)
-    (remove-hook 'pre-command-hook #'beacon--pre-command)
-    (remove-hook 'before-change-functions #'beacon--vanish)))
+    (remove-hook 'pre-command-hook #'beacon--pre-command)))
 
 (provide 'beacon)
 ;;; beacon.el ends here

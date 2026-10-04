@@ -71,7 +71,9 @@ The current buffer must not have a backing file."
   (if (and (not buffer-file-name)
            (eq bookmark-make-record-function #'bookmark-make-record-default))
       `(,(bookmark-buffer-name)
-        (buffer . ,(buffer-name))
+        (buffer . ,(if (eq major-mode 'exwm-mode)
+                       exwm--id
+                     (buffer-name)))
         ;; save buffer dir for dired-mode buffers
         (buffer-dir . ,(if (equal major-mode 'dired-mode)
                            default-directory nil))
@@ -101,7 +103,9 @@ The current buffer must not have a backing file."
   (save-window-excursion
     (dolist (buf (alist-get 'buffer state))
       (condition-case err
-          (bookmark-jump buf #'ignore)
+          (bookmark-jump (if (numberp buf)
+                             (alist-get buf exwm--id-buffer-alist)
+                           buf) #'ignore)
         (error (delay-warning 'bookmark-view (format "Error %S when opening %S" err buf))))))
   (window-state-put (alist-get 'window state) (frame-root-window frame)))
 
@@ -152,12 +156,13 @@ Return DEFAULT if user input is empty."
 
 ;;;###autoload
 (defun bookmark-view-handler-fallback (bm)
-  "Handle buffer bookmark BM, used for buffers without file."
-  (let* ((bm (bookmark-get-bookmark-record bm))
-         (name (alist-get 'buffer bm)))
-    (unless (get-buffer name)
-      (with-current-buffer (get-buffer-create name)
-        (insert (format "bookmark-view: Buffer %s not found" name))))))
+  "Handle buffer bookmark BM, used for buffers without file, like exwm-mode buffers."
+  ;; (let* ((bm (bookmark-get-bookmark-record bm))
+  ;;        (name (alist-get 'buffer bm)))
+  ;;   (unless (get-buffer name)
+  ;;     (with-current-buffer (get-buffer-create name)
+  ;;       (insert (format "bookmark-view: Buffer %s not found" name)))))
+  nil)
 
 ;;;###autoload
 (defun bookmark-view-handler (bm)
@@ -188,7 +193,9 @@ without overwriting an already existing bookmark."
 
 (defun bookmark-view-update-buffer-point (elt)
   (when (eq (car-safe elt) 'buffer)
-    (let ((buffer (get-buffer (nth 1 elt))))
+    (let* ((buf-id (nth 1 elt))
+           (buffer (unless (numberp buf-id)
+                     (get-buffer buf-id))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (mapc (lambda (elt)
@@ -207,24 +214,32 @@ without overwriting an already existing bookmark."
               (mapc (lambda (elt)
                       (let* ((buffer-alist (cdr elt))
                              (buffer-cons (assoc 'buffer buffer-alist))
+                             (buf-id (cdr buffer-cons))
+                             (buf-name (if (numberp buf-id)
+                                           (alist-get buf-id exwm--id-buffer-alist)
+                                         buf-id))
+                             (buffer (and buf-name (get-buffer buf-name)))
                              (buffer-dir (cdr (assoc 'buffer-dir buffer-alist))))
-                        (when buffer-dir
-                          (unless (and buffer-cons (get-buffer (cdr buffer-cons)))
+                        (if (and buffer-cons buffer)
+                            buffer
+                          (when buffer-dir
                             (dired buffer-dir)))))
                     (cdr elt))
             (when (eq (car-safe elt) 'window)
               (mapc (lambda (elt)
                       (if (eq (car-safe elt) 'leaf)
                           (mapc (lambda (elt)
-                                  (when (eq (car-safe elt) 'buffer)
-                                    (bookmark-view-update-buffer-point elt)))
+                                  (bookmark-view-update-buffer-point elt))
                                 (cdr elt))
-                        (when (eq (car-safe elt) 'buffer)
-                          (bookmark-view-update-buffer-point elt))))
+                        (bookmark-view-update-buffer-point elt)))
                     (cdr elt))
               (cdr elt))))
         (cdr (bookmark-get-bookmark bm)))
-  (bookmark-jump bm #'ignore))
+  ;; (bookmark-jump bm #'ignore)
+  (let ((switch-to-buffer-preserve-window-point nil))
+      (bookmark-jump bm #'switch-to-buffer)))
+
+;; (advice-add 'bookmark-jump :after #'recenter)
 
 ;;;###autoload
 (defun bookmark-view-delete (name)

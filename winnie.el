@@ -8,39 +8,21 @@
 (defvar winnie-boring-buffers '("*Completions*" "*lispy-message*" "*Ilist*"))
 (defvar winnie-boring-buffers-regexp "^ \\*")
 
-(defun winnie-restore-buffer (win conf fallback-buf)
-  (let* ((buf-name (nth 0 conf))
-         (buf (if (numberp buf-name)
-                  (alist-get buf-name exwm--id-buffer-alist)
-                (get-buffer buf-name)))
-         (buf-file-name (nth 1 conf))
-         (selected (nth 2 conf))
-         (dedicated (nth 3 conf)))
-    (cond (buf
-           (progn (set-window-buffer win buf)
-                  (and dedicated (set-window-dedicated-p win t))))
-          (buf-file-name
-           (if (directory-name-p buf-file-name)
-               (set-window-buffer win (dired-internal-noselect buf-file-name))
-             (when (file-exists-p buf-file-name)
-               (set-window-buffer win (find-file-noselect buf-file-name)))))
-          (t (and fallback-buf (set-window-buffer win fallback-buf))))
-    (when selected (select-window win 'mark-for-redisplay))))
-
 (defvar winnie-dead-buf-found nil)
 (defun winnie-find-dead-buffer (conf)
-  (unless winnie-dead-buf-found
-    (if (winnie-buffer-p (car conf))
-        (let* ((buf-name (nth 0 conf))
-               (buf (if (numberp buf-name)
-                        (alist-get buf-name exwm--id-buffer-alist)
-                      (get-buffer buf-name)))
-               (buf-file-name (nth 1 conf)))
-          (unless (or buf-file-name buf)
-            (setq winnie-dead-buf-found t)))
-      (let ((others (nthcdr 3 conf)))
-        (winnie-find-dead-buffer (cl-third conf))
-        (winnie-find-dead-buffer (if (> (length others) 2) others (car others)))))))
+  (when conf
+    (unless winnie-dead-buf-found
+      (if (winnie-buffer-p (car conf))
+          (let* ((buf-name (nth 0 conf))
+                 (buf (if (numberp buf-name)
+                          (alist-get buf-name exwm--id-buffer-alist)
+                        (get-buffer buf-name)))
+                 (buf-file-name (nth 1 conf)))
+            (unless (or buf-file-name buf)
+              (setq winnie-dead-buf-found t)))
+        (let ((others (nthcdr 3 conf)))
+          (winnie-find-dead-buffer (cl-third conf))
+          (winnie-find-dead-buffer (if (> (length others) 2) others (car others))))))))
 
 (defun winnie-clean-confs ()
   (let* ((frame (selected-frame))
@@ -53,20 +35,43 @@
         (push conf confs-new)))
     (alist-set 'winnie-alist frame confs-new)))
 
+;; split-window won't work if buffer of a fullscreen exwm-mode window (exwm-layout--fullscreen-p) is in conf
 (defun winnie-list-to-tree (conf win fallback-buf)
   "Resume the window from saved list CONF, WIN is `selected-window', on which performs the
 split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
-  (if (winnie-buffer-p (car conf))
-      (winnie-restore-buffer win conf fallback-buf)
-    (let* ((horizontal (eq (car conf) 'h))
-           (newwin (split-window win
-                                 ;; (if horizontal (cadr conf) (cadr conf))
-                                 (if horizontal (+ (cadr conf) 1) (cadr conf))
-                                 horizontal))
-           (others (nthcdr 3 conf)))
-      (winnie-list-to-tree (cl-third conf) win fallback-buf)
-      (winnie-list-to-tree (if (> (length others) 2) others (car others))
-                           newwin fallback-buf))))
+  (let ((car-conf (car conf)))
+    (if (winnie-buffer-p car-conf)
+        (let* ((buf-name (nth 0 conf))
+               (buf (if (numberp buf-name)
+                        (alist-get buf-name exwm--id-buffer-alist)
+                      (get-buffer buf-name)))
+               (buf-file-name (nth 1 conf))
+               (selected (nth 2 conf))
+               (dedicated (nth 3 conf)))
+          (cond (buf
+                 (with-current-buffer buf
+                   (set-window-buffer win buf)
+                   (and dedicated (set-window-dedicated-p win t))
+                   (when (and (derived-mode-p 'exwm-mode)
+                              (memq xcb:Atom:_NET_WM_STATE_FULLSCREEN exwm--ewmh-state))
+                     (select-window win 'mark-for-redisplay))))
+                (buf-file-name
+                 (if (directory-name-p buf-file-name)
+                     (set-window-buffer win (dired-internal-noselect buf-file-name))
+                   (when (file-exists-p buf-file-name)
+                     (set-window-buffer win (find-file-noselect buf-file-name)))))
+                (t (and fallback-buf (set-window-buffer win fallback-buf))))
+          (when selected
+            (select-window win 'mark-for-redisplay)))
+      (let* ((horizontal (eq (car conf) 'h))
+             (newwin (split-window win
+                                   ;; (if horizontal (cadr conf) (cadr conf))
+                                   (if horizontal (+ (cadr conf) 1) (cadr conf))
+                                   horizontal))
+             (others (nthcdr 3 conf)))
+        (winnie-list-to-tree (cl-third conf) win fallback-buf)
+        (winnie-list-to-tree (if (> (length others) 2) others (car others))
+                             newwin fallback-buf)))))
 
 ;; window-state-change-functions is a hook that is run from redisplay.
 ;; Redisplay runs asynchronously to your code. It looks up the global value of window-state-change-functions.
@@ -75,9 +80,10 @@ split, SET-WINBUF is a function with parameter WIN & BUF, which associate them."
 (defun winnie-restore (confs winnie-position)
   (cl-letf ((window-state-change-functions (remove 'winnie-window-state-change window-state-change-functions)))
     (let* ((winnie-length (length confs))
-           fallback-buf)
+           (fallback-buf (get-buffer-create "*scratch*")))
+      (when (minibufferp)
+        (abort-recursive-edit))
       (when (window-dedicated-p)
-        (setq fallback-buf (get-buffer-create "*scratch*"))
         (pop-to-buffer fallback-buf))
       (delete-other-windows)
       (winnie-list-to-tree (nth winnie-position confs)
@@ -256,23 +262,34 @@ Comparison is done via `equal'.  The index is 0-based."
   (or (equal cmd 'winnie-undo)
       (equal cmd 'winnie-redo)))
 
+(defvar winnie-last-operation-time nil)
+(defvar winnie-traverse-abort-delay 3)
 (defun winnie-undo ()
   (interactive)
+  (when (bound-and-true-p exwm--floating-frame)
+      (exwm-floating-hide))
   (when winnie-alist
     (winnie-clean-confs)
-    (unless (winnie-command-p winnie-real-last-command)
+    (unless (and (winnie-command-p winnie-real-last-command)
+                 (< (time-to-seconds (time-since winnie-last-operation-time)) winnie-traverse-abort-delay))
       (when winnie-traverse-destination-conf
         ;; update so the current is always 0
         (winnie-save winnie-traverse-destination-conf)
         (setq winnie-traverse-destination-conf nil))
       (setq winnie-traverse-position 0))
-    (winnie-restore-relative 1)))
+    (winnie-restore-relative 1)
+    (setq winnie-last-operation-time (current-time))))
 
+;; start back has no use case, so first call winnie-redo goto other buffer
 (defun winnie-redo ()
   (interactive)
-  (if (winnie-command-p winnie-real-last-command)
-      (winnie-restore-relative -1)
-    (message "Winnie undo not started.")))
+  (if (and (winnie-command-p winnie-real-last-command)
+           (< (time-to-seconds (time-since winnie-last-operation-time)) winnie-traverse-abort-delay))
+      (progn
+        (winnie-restore-relative -1)
+        (setq winnie-last-operation-time (current-time)))
+    (call-interactively 'mode-line-other-buffer)
+    (setq this-command 'mode-line-other-buffer)))
 
 (defvar winnie-mode-map
   (let ((map (make-sparse-keymap)))
@@ -286,9 +303,12 @@ Comparison is done via `equal'.  The index is 0-based."
   (when (winnie-command-p real-last-command)
     (winnie-restore (cdr (assoc (selected-frame) winnie-alist)) 0)))
 
+(defvar winnie-real-last-command nil)
+(defvar winnie-real-this-command nil)
+
 (defun winnie-record-command ()
-  (setq winnie-real-last-command real-last-command)
-  (setq winnie-real-this-command real-this-command))
+  (setq winnie-real-last-command last-command)
+  (setq winnie-real-this-command this-command))
 
 ;;;###autoload
 (define-minor-mode winnie-mode
